@@ -1,0 +1,12 @@
+# Core dependencies
+opencv-python==4.9.0.80
+insightface==0.7.3
+numpy==1.26.4
+ffmpeg-python==0.2.0
+pygame==2.6.0
+
+# ONNX Runtime with GPU support
+onnxruntime-gpu==1.17.1
+
+# For image handling
+Pillow==10.2.0
