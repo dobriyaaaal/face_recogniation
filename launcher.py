@@ -5,6 +5,7 @@ import sys
 import os
 from libs.face_db import build_face_embeddings
 from ui.camera_ui import run_camera_ui
+import threading
 
 def launch_script(script_path):
     try:
@@ -22,31 +23,36 @@ def launch_script(script_path):
         messagebox.showerror("Launch Error", f"Failed to launch {script_path}\n\n{e}")
 
 def start_real_time_detection():
-    PEOPLE_DIR = os.path.join(os.path.dirname(__file__), "people")
+    def detection_thread():
+        PEOPLE_DIR = os.path.join(os.path.dirname(__file__), "people")
 
-    def has_valid_person_data():
-        if not os.path.exists(PEOPLE_DIR):
+        def has_valid_person_data():
+            if not os.path.exists(PEOPLE_DIR):
+                return False
+            for name in os.listdir(PEOPLE_DIR):
+                person_path = os.path.join(PEOPLE_DIR, name)
+                if os.path.isdir(person_path):
+                    images = [f for f in os.listdir(person_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                    if images:
+                        return True
             return False
-        for name in os.listdir(PEOPLE_DIR):
-            person_path = os.path.join(PEOPLE_DIR, name)
-            if os.path.isdir(person_path):
-                images = [f for f in os.listdir(person_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-                if images:
-                    return True
-        return False
 
-    if not has_valid_person_data():
-        messagebox.showerror("Error", "No valid person data found.\nPlease add at least one person with an image.")
-        return
+        if not has_valid_person_data():
+            messagebox.showerror("Error", "No valid person data found.\nPlease add at least one person with an image.")
+            return
 
-    print("[INFO] Building face embeddings...")
-    build_face_embeddings()
-    print("[DONE] Face embeddings updated.")
+        print("[INFO] Building face embeddings...")
+        build_face_embeddings()
+        print("[DONE] Face embeddings updated.")
 
-    print("[INFO] Starting multi-stream detection...")
+        print("[INFO] Starting multi-stream detection...")
 
-    from libs.multi_stream_detector import run_multi_stream_detection
-    run_multi_stream_detection()
+        from libs.multi_stream_detector import run_multi_stream_detection
+        run_multi_stream_detection()
+
+    # Run detection in a background thread to avoid freezing the GUI
+    t = threading.Thread(target=detection_thread, daemon=True)
+    t.start()
 
 def open_camera_manager():
     from ui.camera_manager import CameraManagerUI
