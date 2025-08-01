@@ -23,7 +23,7 @@ def launch_script(script_path):
         messagebox.showerror("Launch Error", f"Failed to launch {script_path}\n\n{e}")
 
 def start_real_time_detection():
-    def detection_thread():
+    def detection_thread(loading_win):
         PEOPLE_DIR = os.path.join(os.path.dirname(__file__), "people")
 
         def has_valid_person_data():
@@ -39,6 +39,7 @@ def start_real_time_detection():
 
         if not has_valid_person_data():
             messagebox.showerror("Error", "No valid person data found.\nPlease add at least one person with an image.")
+            loading_win.destroy()
             return
 
         print("[INFO] Building face embeddings...")
@@ -48,10 +49,21 @@ def start_real_time_detection():
         print("[INFO] Starting multi-stream detection...")
 
         from libs.multi_stream_detector import run_multi_stream_detection
-        run_multi_stream_detection()
+        try:
+            run_multi_stream_detection()
+        finally:
+            loading_win.destroy()
 
-    # Run detection in a background thread to avoid freezing the GUI
-    t = threading.Thread(target=detection_thread, daemon=True)
+    # Show loading UI
+    loading_win = tk.Toplevel()
+    loading_win.title("Loading...")
+    loading_win.geometry("300x100")
+    tk.Label(loading_win, text="Starting detection, please wait...").pack(pady=20)
+    loading_win.grab_set()
+    loading_win.update()
+
+    # Run detection in a background thread
+    t = threading.Thread(target=detection_thread, args=(loading_win,), daemon=True)
     t.start()
 
 def open_camera_manager():

@@ -6,9 +6,21 @@ from PIL import Image, ImageTk
 from queue import Queue
 from libs.detector import process_frame
 
-# Load stream URLs from config
-with open("config/streams.txt") as f:
-    stream_urls = [line.strip() for line in f if line.strip()]
+# --- Config Folder/File Creation ---
+CONFIG_DIR = "config"
+STREAMS_PATH = os.path.join(CONFIG_DIR, "streams.txt")
+os.makedirs(CONFIG_DIR, exist_ok=True)
+if not os.path.exists(STREAMS_PATH):
+    with open(STREAMS_PATH, "w") as f:
+        open(STREAMS_PATH, "w").close()
+
+# --- Load Stream URLs ---
+with open(STREAMS_PATH) as f:
+    stream_urls = [
+        line.strip()
+        for line in f
+        if line.strip() and not line.strip().startswith("#")
+    ]
 
 class CameraWindow:
     def __init__(self, master, stream_url, index):
@@ -27,10 +39,8 @@ class CameraWindow:
 
         # Start capture thread
         threading.Thread(target=self.capture_loop, daemon=True).start()
-
         # Schedule GUI update in main thread
         self.window.after(30, self.update_gui)
-
         self.window.protocol("WM_DELETE_WINDOW", self.stop)
 
     def capture_loop(self):
@@ -52,7 +62,6 @@ class CameraWindow:
     def update_gui(self):
         if not self.running:
             return
-
         try:
             while not self.queue.empty():
                 frame = self.queue.get()
@@ -82,3 +91,6 @@ def run_camera_ui():
         windows.append(cam_win)
 
     root.mainloop()
+
+if __name__ == "__main__":
+    run_camera_ui()
