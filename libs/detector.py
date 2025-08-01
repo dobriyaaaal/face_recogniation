@@ -1,58 +1,106 @@
 import os
 import sys
-import pickle
 import time
+import pickle
 import threading
 import datetime
 import numpy as np
 import cv2
+from insightface.app import FaceAnalysis
 import pygame
 import torch
+from pathlib import Path
 
-from insightface.app import FaceAnalysis
+# --- Add YOLOv5 path ---
+YOLO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'yolov5'))
+if YOLO_PATH not in sys.path:
+    sys.path.insert(0, YOLO_PATH)
 
-# --- INIT SOUND ALERT SYSTEM ---
+from yolov5.models.common import DetectMultiBackend
+from yolov5.utils.general import non_max_suppression
+
+# --- Init sound ---
 pygame.mixer.init()
 alert_lock = threading.Lock()
-sound_cooldown_seconds = 10
 last_sound_time = {}
+sound_cooldown_seconds = 10
 
-# --- THROTTLE SCREENSHOTS ---
-screenshot_cooldown_seconds = 10
+# --- Screenshot cooldown ---
 last_screenshot_time = {}
+screenshot_cooldown_seconds = 10
 
-# --- INIT DETECTOR ---
+# --- Devices ---
+yolo_device = torch.device('cpu')  # run YOLO on CPU
+face_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# --- Globals ---
 app = None
 face_db = {}
 _initialized = False
 init_lock = threading.Lock()
+yolo_model = None
 
-# --- INIT PERSON DETECTOR (YOLOv5) ---
-YOLO_PATH = os.path.join(os.path.dirname(__file__), '../yolov5')
-if YOLO_PATH not in sys.path:
-    sys.path.insert(0, YOLO_PATH)
 
-from models.common import DetectMultiBackend
-from utils.datasets import letterbox
-from utils.general import non_max_suppression, scale_coords
-from utils.torch_utils import select_device
+def log(msg):
+    print(f"[INFO] {msg}")
 
-device = select_device('')
-person_model = DetectMultiBackend(os.path.join(YOLO_PATH, 'yolov5s.pt'), device=device)
-stride, names, pt = person_model.stride, person_model.names, person_model.pt
+def warn(msg):
+    print(f"[WARNING] {msg}")
+
+def scale_coords(img1_shape, coords, img0_shape, ratio_pad=None):
+    gain = min(img1_shape[0] / img0_shape[0], img1_shape[1] / img0_shape[1])
+    pad = ((img1_shape[1] - img0_shape[1] * gain) / 2, (img1_shape[0] - img0_shape[0] * gain) / 2)
+    coords[:, [0, 2]] -= pad[0]
+    coords[:, [1, 3]] -= pad[1]
+    coords[:, :4] /= gain
+    coords[:, 0].clamp_(0, img0_shape[1])
+    coords[:, 1].clamp_(0, img0_shape[0])
+    coords[:, 2].clamp_(0, img0_shape[1])
+    coords[:, 3].clamp_(0, img0_shape[0])
+    return coords
+
+def letterbox(im, new_shape=(640, 640), color=(114, 114, 114)):
+    shape = im.shape[:2]
+    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
+    new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
+    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]
+    dw /= 2
+    dh /= 2
+    im = cv2.resize(im, new_unpad, interpolation=cv2.INTER_LINEAR)
+    top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
+    left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
+    im = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
+    return im, r, (dw, dh)
 
 def initialize_detector():
-    global app, face_db, _initialized
+    global app, face_db, _initialized, yolo_model
     with init_lock:
         if _initialized:
             return
-        print("[INFO] Initializing face detector...")
-        app = FaceAnalysis(name='buffalo_s')
-        app.prepare(ctx_id=0)
-        with open('embeddings/face_db.pkl', 'rb') as f:
-            face_db.update(pickle.load(f))
-        _initialized = True
-        print("[DONE] Detector ready.")
+        try:
+            log("Preparing face recognition model (InsightFace)...")
+            app = FaceAnalysis(name='buffalo_s')
+            app.prepare(ctx_id=0 if face_device.type == 'cuda' else -1)
+
+            log("Loading known face embeddings...")
+            with open('embeddings/face_db.pkl', 'rb') as f:
+                face_db.update(pickle.load(f))
+
+            yolo_weights = os.path.join(YOLO_PATH, 'yolov5n.pt')
+            if not os.path.exists(yolo_weights):
+                raise FileNotFoundError(f"YOLOv5 weights not found at {yolo_weights}")
+
+            log("Loading object detection model (YOLOv5) on CPU...")
+            yolo_model = DetectMultiBackend(yolo_weights, device=yolo_device)
+            yolo_model.eval()
+
+            log("Detector initialized successfully.")
+            _initialized = True
+        except Exception as e:
+            warn(f"Detector initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
+            _initialized = False
 
 def recognize_face(face_embedding):
     max_sim = -1
@@ -79,72 +127,62 @@ def play_alert(name):
             pygame.mixer.music.load("alert.mp3")
             pygame.mixer.music.play()
         except Exception as e:
-            print(f"[Sound error] {e}")
+            warn(f"Sound error: {e}")
 
-def detect_people_yolo(frame):
-    img = letterbox(frame, 640, stride=stride, auto=True)[0]
-    img = img.transpose((2, 0, 1))[::-1]  # BGR to RGB, to 3xHxW
-    img = np.ascontiguousarray(img)
+def detect_people(frame):
+    try:
+        img, ratio, (dw, dh) = letterbox(frame, new_shape=(640, 640))
+        img = img[:, :, ::-1].transpose(2, 0, 1)
+        img = np.ascontiguousarray(img)
 
-    im = torch.from_numpy(img).to(device)
-    im = im.float() / 255.0
-    if im.ndimension() == 3:
-        im = im.unsqueeze(0)
+        im_tensor = torch.from_numpy(img).to(yolo_device).float() / 255.0
+        if im_tensor.ndimension() == 3:
+            im_tensor = im_tensor.unsqueeze(0)
 
-    pred = person_model(im, augment=False, visualize=False)
-    pred = non_max_suppression(pred, conf_thres=0.4, iou_thres=0.45, classes=[0])[0]
+        pred = yolo_model(im_tensor)
+        pred = non_max_suppression(pred, conf_thres=0.4, iou_thres=0.45, classes=[0])[0]
 
-    person_boxes = []
-    if pred is not None and len(pred):
-        pred[:, :4] = scale_coords(im.shape[2:], pred[:, :4], frame.shape).round()
-        for *xyxy, conf, cls in pred:
-            x1, y1, x2, y2 = map(int, xyxy)
-            person_boxes.append((x1, y1, x2, y2))
-    return person_boxes
+        boxes = []
+        if pred is not None and len(pred):
+            pred[:, :4] = scale_coords(im_tensor.shape[2:], pred[:, :4], frame.shape).round()
+            for *xyxy, _, _ in pred:
+                boxes.append([int(x.item()) for x in xyxy])
+        return boxes
 
-def crop_upper_body(frame, box):
-    x1, y1, x2, y2 = box
-    height = y2 - y1
-    cropped = frame[y1:y1 + int(0.6 * height), x1:x2]
-    return cropped
-
-def is_face_big_enough(bbox, min_size=60):
-    x1, y1, x2, y2 = bbox.astype(int)
-    return (x2 - x1) >= min_size and (y2 - y1) >= min_size
+    except Exception as e:
+        warn(f"detect_people failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
 
 def process_frame(frame):
     if not _initialized:
-        initialize_detector()
+        return frame
 
-    recognized = []
     now = time.time()
-    person_boxes = detect_people_yolo(frame)
+    person_boxes = detect_people(frame)
 
     for box in person_boxes:
-        cropped = crop_upper_body(frame, box)
-        faces = app.get(cropped)
+        x1, y1, x2, y2 = box
+        crop = frame[max(y1-20, 0):min(y2, frame.shape[0]), max(x1, 0):min(x2, frame.shape[1])]
 
+        if crop.size == 0:
+            continue
+
+        faces = app.get(crop)
         for face in faces:
-            if not is_face_big_enough(face.bbox):
-                continue
-
+            bbox = face.bbox.astype(int)
             embedding = face.normed_embedding
             name, sim, info = recognize_face(embedding)
 
-            # Project face bbox back to original frame
-            fx1, fy1, fx2, fy2 = face.bbox.astype(int)
-            abs_x1 = box[0] + fx1
-            abs_y1 = box[1] + fy1
-            abs_x2 = box[0] + fx2
-            abs_y2 = box[1] + fy2
-
             label = f"{name} ({sim:.2f})" if name != "Unknown" else "Unknown"
-            cv2.rectangle(frame, (abs_x1, abs_y1), (abs_x2, abs_y2), (0, 255, 0), 2)
-            cv2.putText(frame, label, (abs_x1, abs_y1 - 10),
+            abs_box = [bbox[0] + x1, bbox[1] + y1 - 20, bbox[2] + x1, bbox[3] + y1 - 20]
+            cv2.rectangle(frame, tuple(abs_box[:2]), tuple(abs_box[2:]), (0, 255, 0), 2)
+            cv2.putText(frame, label, (abs_box[0], abs_box[1] - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
             if name != "Unknown":
-                recognized.append((name, info))
+                log(f"Person detected: {name}")
                 if (name not in last_screenshot_time) or ((now - last_screenshot_time[name]) > screenshot_cooldown_seconds):
                     folder = os.path.join("detections", name)
                     os.makedirs(folder, exist_ok=True)
@@ -153,16 +191,8 @@ def process_frame(frame):
                     try:
                         cv2.imwrite(filepath, frame)
                     except Exception as e:
-                        print(f"⚠️ Screenshot error: {e}")
+                        warn(f"Screenshot error: {e}")
                     last_screenshot_time[name] = now
                 threading.Thread(target=play_alert, args=(name,), daemon=True).start()
-
-    if recognized:
-        name, info = recognized[0]
-        lines = [f"Name: {name}"] + [f"{k}: {v}" for k, v in info.items() if k.lower() != "name"]
-        for i, line in enumerate(lines):
-            y = 25 + i * 25
-            cv2.putText(frame, line, (10, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (50, 200, 255), 2)
 
     return frame

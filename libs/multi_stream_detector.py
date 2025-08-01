@@ -1,16 +1,18 @@
 import cv2
 import threading
 import os
-from libs.detector import process_frame
 import queue
 from concurrent.futures import ThreadPoolExecutor
 import tkinter as tk
 from tkinter import messagebox
 
-# Load stream URLs (one per line in streams.txt)
+from libs.detector import process_frame, initialize_detector
+
+# Load stream URLs
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "../config/streams.txt")
 with open(CONFIG_PATH) as f:
     stream_urls = [line.strip() for line in f if line.strip()]
+
 
 def resize_with_aspect_ratio(image, width=None, height=None, inter=cv2.INTER_AREA):
     (h, w) = image.shape[:2]
@@ -24,6 +26,7 @@ def resize_with_aspect_ratio(image, width=None, height=None, inter=cv2.INTER_ARE
         dim = (int(w * r), height)
     return cv2.resize(image, dim, interpolation=inter)
 
+
 def stream_worker(index, url, notify_error=None):
     cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -36,7 +39,7 @@ def stream_worker(index, url, notify_error=None):
         return
 
     window_name = f"Camera {index}"
-    cv2.namedWindow(window_name, cv2.cv2.WINDOW_AUTOSIZE)
+    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
     print(f"[INFO] Started stream {index}: {url}")
 
     frame_queue = queue.Queue(maxsize=3)
@@ -46,11 +49,12 @@ def stream_worker(index, url, notify_error=None):
         while True:
             ret, frame = cap.read()
             if not ret:
+                print(f"[WARNING] Stream {index} ended or lost connection.")
                 break
             try:
                 frame_queue.put_nowait(frame)
             except queue.Full:
-                pass
+                pass  # drop frame if too slow
 
     def detector():
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -60,6 +64,7 @@ def stream_worker(index, url, notify_error=None):
                 except queue.Empty:
                     continue
                 future = executor.submit(process_frame, frame.copy())
+
                 def callback(fut):
                     try:
                         processed = fut.result()
@@ -68,11 +73,12 @@ def stream_worker(index, url, notify_error=None):
                         except queue.Full:
                             pass
                     except Exception as e:
-                        print(f"[Detector error] {e}")
+                        print(f"[Detector error] Camera {index}: {e}")
                 future.add_done_callback(callback)
 
     threading.Thread(target=reader, daemon=True).start()
     threading.Thread(target=detector, daemon=True).start()
+
     moved = False
     while True:
         try:
@@ -81,22 +87,29 @@ def stream_worker(index, url, notify_error=None):
             continue
         cv2.imshow(window_name, display_frame)
         if not moved:
-            cv2.moveWindow(window_name, 0, 0)
+            cv2.moveWindow(window_name, 200 * index, 50 * index)
             moved = True
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
     cap.release()
     cv2.destroyWindow(window_name)
+
+
 def show_stream_error(message):
     try:
         messagebox.showerror("Stream Error", message)
     except:
         print(f"[UI ERROR] {message}")
 
+
 def run_multi_stream_detection():
+    # Load detector in background (once)
+    threading.Thread(target=initialize_detector, daemon=True).start()
+
     for i, url in enumerate(stream_urls):
         threading.Thread(target=stream_worker, args=(i, url, show_stream_error), daemon=True).start()
+
     print("[INFO] Press 'q' in any window to exit.")
     while True:
         if cv2.waitKey(1) & 0xFF == ord('q'):
