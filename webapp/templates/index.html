@@ -194,6 +194,8 @@
         // Initialize socket connection
         const socket = io();
 
+        // Socket connection will be initialized in the Dashboard component
+
         const darkTheme = createTheme({
             palette: {
                 mode: 'dark',
@@ -240,6 +242,7 @@
                     try {
                         setTestVideo('testing'); // Show loading state
                         
+                        // First test connectivity
                         const response = await fetch('/api/camera/test', {
                             method: 'POST',
                             headers: {
@@ -251,23 +254,9 @@
                         const result = await response.json();
                         
                         if (result.success) {
-                            // Show preview in a new window with the base64 image
-                            const previewWindow = window.open('', '_blank', 'width=800,height=600');
-                            previewWindow.document.write(`
-                                <html>
-                                    <head><title>Camera Test - ${cameraName || cameraUrl}</title></head>
-                                    <body style="margin: 0; padding: 20px; background: #f5f5f5; font-family: Arial, sans-serif;">
-                                        <h2>Camera Test Result</h2>
-                                        <p><strong>URL:</strong> ${cameraUrl}</p>
-                                        <p><strong>Status:</strong> <span style="color: green;">✅ Connected Successfully</span></p>
-                                        <div style="border: 2px solid #ddd; border-radius: 8px; overflow: hidden; display: inline-block;">
-                                            <img src="${result.preview}" alt="Camera Preview" style="max-width: 100%; height: auto;">
-                                        </div>
-                                        <br><br>
-                                        <button onclick="window.close()" style="padding: 10px 20px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
-                                    </body>
-                                </html>
-                            `);
+                            // Open live preview window
+                            const previewUrl = `/api/camera/preview?url=${encodeURIComponent(cameraUrl)}&name=${encodeURIComponent(cameraName || 'Camera')}`;
+                            window.open(previewUrl, '_blank', 'width=900,height=700,scrollbars=yes,resizable=yes');
                             setTestVideo('success');
                         } else {
                             // Show error in new window
@@ -366,7 +355,7 @@
         }
 
         // Add Person Dialog Component
-        function AddPersonDialog({ open, onClose, onAdd }) {
+        function AddPersonDialog({ open, onClose, onAdd, loading }) {
             const [personName, setPersonName] = useState('');
             const [personImages, setPersonImages] = useState([]);
             const [customFields, setCustomFields] = useState([{ key: '', value: '' }]);
@@ -374,6 +363,10 @@
             const handleImageUpload = (event) => {
                 const files = Array.from(event.target.files);
                 setPersonImages(files);
+            };
+
+            const removeImage = (indexToRemove) => {
+                setPersonImages(personImages.filter((_, index) => index !== indexToRemove));
             };
 
             const addCustomField = () => {
@@ -395,15 +388,32 @@
                 if (personName && personImages.length > 0) {
                     const customData = customFields.filter(f => f.key && f.value);
                     onAdd(personName, personImages, customData);
-                    setPersonName('');
-                    setPersonImages([]);
-                    setCustomFields([{ key: '', value: '' }]);
+                    // Don't close dialog here - let the parent handle it after loading completes
+                }
+            };
+
+            const resetForm = () => {
+                setPersonName('');
+                setPersonImages([]);
+                setCustomFields([{ key: '', value: '' }]);
+            };
+
+            const handleClose = () => {
+                if (!loading) {  // Only allow closing if not loading
+                    resetForm();
                     onClose();
                 }
             };
 
+            // Reset form when dialog opens
+            useEffect(() => {
+                if (open && !loading) {
+                    resetForm();
+                }
+            }, [open]);
+
             return (
-                <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+                <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
                     <DialogTitle>Add Person</DialogTitle>
                     <DialogContent>
                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
@@ -413,6 +423,7 @@
                                 onChange={(e) => setPersonName(e.target.value)}
                                 fullWidth
                                 required
+                                disabled={loading}
                             />
                             
                             <Box>
@@ -423,6 +434,7 @@
                                     accept="image/*"
                                     onChange={handleImageUpload}
                                     style={{ width: '100%', padding: '8px' }}
+                                    disabled={loading}
                                 />
                                 {personImages.length > 0 && (
                                     <Typography variant="caption" color="success.main">
@@ -430,6 +442,44 @@
                                     </Typography>
                                 )}
                             </Box>
+
+                            {/* Image Preview Section */}
+                            {personImages.length > 0 && (
+                                <Box>
+                                    <Typography variant="subtitle2" sx={{ mb: 1 }}>Image Preview</Typography>
+                                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                                        {personImages.map((image, index) => (
+                                            <Box key={index} sx={{ position: 'relative', border: '1px solid #ddd', borderRadius: 1 }}>
+                                                <img
+                                                    src={URL.createObjectURL(image)}
+                                                    alt={`Preview ${index + 1}`}
+                                                    style={{ 
+                                                        width: '80px', 
+                                                        height: '80px', 
+                                                        objectFit: 'cover', 
+                                                        borderRadius: '4px' 
+                                                    }}
+                                                />
+                                                <IconButton
+                                                    size="small"
+                                                    onClick={() => removeImage(index)}
+                                                    disabled={loading}
+                                                    sx={{ 
+                                                        position: 'absolute', 
+                                                        top: -8, 
+                                                        right: -8, 
+                                                        bgcolor: 'error.main', 
+                                                        color: 'white',
+                                                        '&:hover': { bgcolor: 'error.dark' }
+                                                    }}
+                                                >
+                                                    <span className="material-icons" style={{ fontSize: '16px' }}>close</span>
+                                                </IconButton>
+                                            </Box>
+                                        ))}
+                                    </Box>
+                                </Box>
+                            )}
 
                             <Box>
                                 <Typography variant="subtitle2" sx={{ mb: 1 }}>Custom Fields</Typography>
@@ -440,32 +490,219 @@
                                             placeholder="Field name"
                                             value={field.key}
                                             onChange={(e) => updateCustomField(index, 'key', e.target.value)}
+                                            disabled={loading}
                                         />
                                         <TextField
                                             size="small"
                                             placeholder="Field value"
                                             value={field.value}
                                             onChange={(e) => updateCustomField(index, 'value', e.target.value)}
+                                            disabled={loading}
                                         />
                                         <IconButton 
                                             size="small" 
                                             onClick={() => removeCustomField(index)}
-                                            disabled={customFields.length === 1}
+                                            disabled={customFields.length === 1 || loading}
                                         >
                                             <span className="material-icons">delete</span>
                                         </IconButton>
                                     </Box>
                                 ))}
-                                <Button size="small" onClick={addCustomField} startIcon={<span className="material-icons">add</span>}>
+                                <Button 
+                                    size="small" 
+                                    onClick={addCustomField} 
+                                    startIcon={<span className="material-icons">add</span>}
+                                    disabled={loading}
+                                >
                                     Add Field
                                 </Button>
                             </Box>
                         </Box>
                     </DialogContent>
                     <DialogActions>
-                        <Button onClick={onClose}>Cancel</Button>
-                        <Button onClick={handleAdd} variant="contained" disabled={!personName || personImages.length === 0}>
-                            Add Person
+                        <Button onClick={handleClose} disabled={loading}>Cancel</Button>
+                        <Button 
+                            onClick={handleAdd} 
+                            variant="contained" 
+                            disabled={!personName || personImages.length === 0 || loading}
+                            startIcon={loading ? <CircularProgress size={16} /> : null}
+                        >
+                            {loading ? 'Adding...' : 'Add Person'}
+                        </Button>
+                    </DialogActions>
+                </Dialog>
+            );
+        }
+
+        // Edit Person Dialog Component
+        function EditPersonDialog({ open, onClose, onEdit, person, loading }) {
+            const [personName, setPersonName] = useState('');
+            const [personImages, setPersonImages] = useState([]);
+            const [currentImages, setCurrentImages] = useState([]);
+            const [imagesToRemove, setImagesToRemove] = useState([]);
+            const [customFields, setCustomFields] = useState([{ key: '', value: '' }]);
+
+            // Initialize form with person data when dialog opens
+            useEffect(() => {
+                if (person && open) {
+                    setPersonName(person.name || '');
+                    setPersonImages([]);
+                    setImagesToRemove([]);
+                    setCustomFields(person.custom_fields ? 
+                        Object.entries(person.custom_fields).map(([key, value]) => ({ key, value })) : 
+                        [{ key: '', value: '' }]
+                    );
+                    
+                    // Load current images
+                    loadCurrentImages();
+                }
+            }, [person, open]);
+
+            const loadCurrentImages = async () => {
+                if (!person) return;
+                
+                try {
+                    const response = await fetch(`/api/people/${person.id}/images`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        setCurrentImages(data.images || []);
+                    }
+                } catch (error) {
+                    console.error('Failed to load current images:', error);
+                }
+            };
+
+            const handleImageUpload = (event) => {
+                const files = Array.from(event.target.files);
+                setPersonImages(files);
+            };
+
+            const handleRemoveCurrentImage = (filename) => {
+                setImagesToRemove([...imagesToRemove, filename]);
+                setCurrentImages(currentImages.filter(img => img.filename !== filename));
+            };
+
+            const addCustomField = () => {
+                setCustomFields([...customFields, { key: '', value: '' }]);
+            };
+
+            const updateCustomField = (index, field, value) => {
+                const updated = [...customFields];
+                updated[index][field] = value;
+                setCustomFields(updated);
+            };
+
+            const removeCustomField = (index) => {
+                setCustomFields(customFields.filter((_, i) => i !== index));
+            };
+
+            const handleEdit = () => {
+                const validFields = customFields.filter(field => field.key && field.value);
+                onEdit(personName, personImages, validFields, imagesToRemove);
+            };
+
+            const handleClose = () => {
+                setPersonName('');
+                setPersonImages([]);
+                setCurrentImages([]);
+                setImagesToRemove([]);
+                setCustomFields([{ key: '', value: '' }]);
+                onClose();
+            };
+
+            return (
+                <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
+                    <DialogTitle>Edit Person</DialogTitle>
+                    <DialogContent>
+                        <Box sx={{ pt: 2 }}>
+                            <TextField
+                                fullWidth
+                                label="Person Name"
+                                value={personName}
+                                onChange={(e) => setPersonName(e.target.value)}
+                                sx={{ mb: 2 }}
+                            />
+                            
+                            {currentImages.length > 0 && (
+                                <>
+                                    <Typography variant="subtitle1" sx={{ mb: 1 }}>
+                                        Current Images
+                                    </Typography>
+                                    <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
+                                        {currentImages.map((image) => (
+                                            <Box key={image.filename} sx={{ position: 'relative', border: '1px solid #ddd', borderRadius: 1 }}>
+                                                <img
+                                                    src={image.url}
+                                                    alt={image.filename}
+                                                    style={{ width: '80px', height: '80px', objectFit: 'cover', borderRadius: '4px' }}
+                                                />
+                                                <IconButton
+                                                    size="small"
+                                                    onClick={() => handleRemoveCurrentImage(image.filename)}
+                                                    sx={{ 
+                                                        position: 'absolute', 
+                                                        top: -8, 
+                                                        right: -8, 
+                                                        bgcolor: 'error.main', 
+                                                        color: 'white',
+                                                        '&:hover': { bgcolor: 'error.dark' }
+                                                    }}
+                                                >
+                                                    <span className="material-icons" style={{ fontSize: '16px' }}>close</span>
+                                                </IconButton>
+                                            </Box>
+                                        ))}
+                                    </Box>
+                                </>
+                            )}
+                            
+                            <Typography variant="subtitle1" sx={{ mb: 1 }}>
+                                Upload New Images (optional - leave empty to keep current images)
+                            </Typography>
+                            <input
+                                type="file"
+                                multiple
+                                accept="image/*"
+                                onChange={handleImageUpload}
+                                style={{ marginBottom: '16px' }}
+                            />
+                            
+                            <Typography variant="subtitle1" sx={{ mb: 1 }}>
+                                Custom Fields
+                            </Typography>
+                            {customFields.map((field, index) => (
+                                <Box key={index} sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
+                                    <TextField
+                                        label="Field Name"
+                                        value={field.key}
+                                        onChange={(e) => updateCustomField(index, 'key', e.target.value)}
+                                        size="small"
+                                    />
+                                    <TextField
+                                        label="Field Value"
+                                        value={field.value}
+                                        onChange={(e) => updateCustomField(index, 'value', e.target.value)}
+                                        size="small"
+                                    />
+                                    <IconButton onClick={() => removeCustomField(index)} size="small">
+                                        <span className="material-icons">delete</span>
+                                    </IconButton>
+                                </Box>
+                            ))}
+                            <Button onClick={addCustomField} startIcon={<span className="material-icons">add</span>}>
+                                Add Custom Field
+                            </Button>
+                        </Box>
+                    </DialogContent>
+                    <DialogActions>
+                        <Button onClick={handleClose} disabled={loading}>Cancel</Button>
+                        <Button 
+                            onClick={handleEdit} 
+                            variant="contained" 
+                            disabled={!personName || loading}
+                            startIcon={loading ? <CircularProgress size={16} /> : null}
+                        >
+                            {loading ? 'Updating...' : 'Update Person'}
                         </Button>
                     </DialogActions>
                 </Dialog>
@@ -531,21 +768,63 @@
             const [people, setPeople] = useState([]);
             const [streams, setStreams] = useState([]);
             const [detections, setDetections] = useState([]);
-            const [detectionStatus, setDetectionStatus] = useState('idle');
+            const [detectionStatus, setDetectionStatus] = useState('idle'); // idle, starting, loading_detector, loading_streams, running, stopping, error
+            const [detectionMessage, setDetectionMessage] = useState('');
+            const [detectionProgress, setDetectionProgress] = useState('');
             const [alerts, setAlerts] = useState([]);
             
             // Dialog states
             const [addCameraDialog, setAddCameraDialog] = useState(false);
             const [addPersonDialog, setAddPersonDialog] = useState(false);
+            const [editPersonDialog, setEditPersonDialog] = useState(false);
+            const [editingPerson, setEditingPerson] = useState(null);
             const [galleryDialog, setGalleryDialog] = useState(false);
             const [selectedPerson, setSelectedPerson] = useState(null);
             const [selectedDate, setSelectedDate] = useState(null);
+
+            // Loading states
+            const [addPersonLoading, setAddPersonLoading] = useState(false);
+            const [editPersonLoading, setEditPersonLoading] = useState(false);
+            const [deletePersonLoading, setDeletePersonLoading] = useState(null); // ID of person being deleted
 
             // Load initial data
             useEffect(() => {
                 loadPeople();
                 loadStreams();
                 loadDetections();
+            }, []);
+
+            // Setup socket event handlers
+            useEffect(() => {
+                // Socket event listeners for detection status
+                socket.on('detection_status', (data) => {
+                    console.log('Detection status received:', data);
+                    setDetectionStatus(data.status);
+                    setDetectionMessage(data.message || '');
+                });
+
+                socket.on('detection_error', (data) => {
+                    console.log('Detection error received:', data);
+                    setDetectionStatus('error');
+                    setDetectionMessage(data.error || 'Detection failed');
+                    setAlerts(prev => [...prev, { type: 'error', message: data.error || 'Detection failed' }]);
+                });
+
+                socket.on('connect', () => {
+                    console.log('Socket connected');
+                });
+
+                socket.on('disconnect', () => {
+                    console.log('Socket disconnected');
+                });
+
+                // Cleanup function to remove listeners
+                return () => {
+                    socket.off('detection_status');
+                    socket.off('detection_error');
+                    socket.off('connect');
+                    socket.off('disconnect');
+                };
             }, []);
 
             const loadPeople = async () => {
@@ -621,6 +900,7 @@
 
             const handleTestExistingCamera = async (stream) => {
                 try {
+                    // First test connectivity
                     const response = await fetch('/api/camera/test', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -630,23 +910,9 @@
                     const result = await response.json();
                     
                     if (result.success) {
-                        // Show preview in a new window with the base64 image
-                        const previewWindow = window.open('', '_blank', 'width=800,height=600');
-                        previewWindow.document.write(`
-                            <html>
-                                <head><title>Camera Preview - ${stream.name}</title></head>
-                                <body style="margin: 0; padding: 20px; background: #f5f5f5; font-family: Arial, sans-serif;">
-                                    <h2>${stream.name} - Live Preview</h2>
-                                    <p><strong>URL:</strong> ${stream.url}</p>
-                                    <p><strong>Status:</strong> <span style="color: green;">✅ Connected Successfully</span></p>
-                                    <div style="border: 2px solid #ddd; border-radius: 8px; overflow: hidden; display: inline-block;">
-                                        <img src="${result.preview}" alt="Camera Preview" style="max-width: 100%; height: auto;">
-                                    </div>
-                                    <br><br>
-                                    <button onclick="window.close()" style="padding: 10px 20px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
-                                </body>
-                            </html>
-                        `);
+                        // Open live preview window
+                        const previewUrl = `/api/camera/preview?url=${encodeURIComponent(stream.url)}&name=${encodeURIComponent(stream.name)}`;
+                        window.open(previewUrl, '_blank', 'width=900,height=700,scrollbars=yes,resizable=yes');
                     } else {
                         // Show error in new window
                         const errorWindow = window.open('', '_blank', 'width=600,height=400');
@@ -672,6 +938,7 @@
             };
 
             const handleAddPerson = async (name, images, customFields) => {
+                setAddPersonLoading(true);
                 try {
                     const formData = new FormData();
                     formData.append('name', name);
@@ -692,6 +959,7 @@
                     
                     if (response.ok) {
                         setAlerts([...alerts, { type: 'success', message: `Person "${name}" added successfully!` }]);
+                        setAddPersonDialog(false);
                         loadPeople();
                     } else {
                         const error = await response.json();
@@ -699,33 +967,180 @@
                     }
                 } catch (error) {
                     setAlerts([...alerts, { type: 'error', message: 'Failed to add person' }]);
+                } finally {
+                    setAddPersonLoading(false);
+                }
+            };
+
+            const handleDeletePerson = async (person) => {
+                if (!confirm(`Are you sure you want to delete "${person.name}"? This will permanently remove all their images and detection history.`)) {
+                    return;
+                }
+                
+                setDeletePersonLoading(person.id);
+                try {
+                    const response = await fetch(`/api/people/${person.id}`, {
+                        method: 'DELETE'
+                    });
+                    
+                    if (response.ok) {
+                        setAlerts([...alerts, { type: 'success', message: `Person "${person.name}" deleted successfully!` }]);
+                        loadPeople();
+                    } else {
+                        const error = await response.json();
+                        setAlerts([...alerts, { type: 'error', message: error.error || 'Failed to delete person' }]);
+                    }
+                } catch (error) {
+                    setAlerts([...alerts, { type: 'error', message: 'Failed to delete person' }]);
+                } finally {
+                    setDeletePersonLoading(null);
+                }
+            };
+
+            const handleEditPerson = async (name, images, customFields, imagesToRemove) => {
+                if (!editingPerson) return;
+                
+                setEditPersonLoading(true);
+                try {
+                    const formData = new FormData();
+                    formData.append('name', name);
+                    
+                    images.forEach((image, index) => {
+                        formData.append(`image_${index}`, image);
+                    });
+                    
+                    customFields.forEach((field, index) => {
+                        formData.append(`custom_${index}_key`, field.key);
+                        formData.append(`custom_${index}_value`, field.value);
+                    });
+
+                    if (imagesToRemove && imagesToRemove.length > 0) {
+                        formData.append('remove_images', JSON.stringify(imagesToRemove));
+                    }
+
+                    const response = await fetch(`/api/people/${editingPerson.id}`, {
+                        method: 'PUT',
+                        body: formData
+                    });
+                    
+                    if (response.ok) {
+                        setAlerts([...alerts, { type: 'success', message: `Person "${name}" updated successfully!` }]);
+                        setEditPersonDialog(false);
+                        setEditingPerson(null);
+                        loadPeople();
+                    } else {
+                        const error = await response.json();
+                        setAlerts([...alerts, { type: 'error', message: error.error || 'Failed to update person' }]);
+                    }
+                } catch (error) {
+                    setAlerts([...alerts, { type: 'error', message: 'Failed to update person' }]);
+                } finally {
+                    setEditPersonLoading(false);
                 }
             };
 
             const startDetection = async () => {
                 try {
+                    setDetectionStatus('starting');
+                    setDetectionMessage('Initializing detection system...');
+                    
+                    // Open popup window for testing
+                    const popupWindow = window.open(
+                        '/api/detection/test-popup',
+                        'detectionTest',
+                        'width=1000,height=800,scrollbars=yes,resizable=yes,menubar=no,toolbar=no'
+                    );
+                    
+                    if (!popupWindow) {
+                        setAlerts([...alerts, { type: 'error', message: 'Popup blocked! Please allow popups and try again.' }]);
+                        setDetectionStatus('idle');
+                        setDetectionMessage('');
+                        return;
+                    }
+                    
                     const response = await fetch('/api/detection/start', {
                         method: 'POST'
                     });
                     
+                    const result = await response.json();
+                    
                     if (response.ok) {
-                        setDetectionStatus('running');
-                        setAlerts([...alerts, { type: 'success', message: 'Detection started!' }]);
+                        setAlerts([...alerts, { type: 'success', message: 'Detection test window opened! Check the popup for live stream.' }]);
+                        // Start polling for status updates as backup
+                        startStatusPolling();
+                    } else {
+                        setDetectionStatus('idle');
+                        setDetectionMessage('');
+                        setAlerts([...alerts, { type: 'error', message: result.error || 'Failed to start detection' }]);
+                        if (popupWindow) popupWindow.close();
                     }
                 } catch (error) {
+                    setDetectionStatus('idle');
+                    setDetectionMessage('');
                     setAlerts([...alerts, { type: 'error', message: 'Failed to start detection' }]);
                 }
             };
 
+            const testRtspConsole = async () => {
+                try {
+                    setAlerts([...alerts, { type: 'info', message: 'Starting RTSP console test - check terminal output for detailed logs' }]);
+                    
+                    const response = await fetch('/api/test/rtsp-console');
+                    const result = await response.json();
+                    
+                    if (response.ok) {
+                        setAlerts([...alerts, { type: 'success', message: result.message }]);
+                    } else {
+                        setAlerts([...alerts, { type: 'error', message: 'Failed to start console test' }]);
+                    }
+                } catch (error) {
+                    setAlerts([...alerts, { type: 'error', message: 'Failed to start console test' }]);
+                }
+            };
+
+            // Backup status polling
+            const startStatusPolling = () => {
+                const pollInterval = setInterval(async () => {
+                    try {
+                        const response = await fetch('/api/detection/status');
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data.running) {
+                                // Detection is running, stop polling
+                                clearInterval(pollInterval);
+                                if (detectionStatus !== 'running') {
+                                    setDetectionStatus('running');
+                                    setDetectionMessage('Detection is active');
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        console.log('Status polling error:', error);
+                    }
+                }, 1000); // Poll every second
+
+                // Stop polling after 30 seconds
+                setTimeout(() => {
+                    clearInterval(pollInterval);
+                }, 30000);
+            };
+
             const stopDetection = async () => {
                 try {
+                    setDetectionStatus('stopping');
+                    setDetectionMessage('Stopping detection...');
+                    
                     const response = await fetch('/api/detection/stop', {
                         method: 'POST'
                     });
                     
                     if (response.ok) {
                         setDetectionStatus('idle');
+                        setDetectionMessage('');
                         setAlerts([...alerts, { type: 'success', message: 'Detection stopped!' }]);
+                    } else {
+                        const result = await response.json();
+                        setAlerts([...alerts, { type: 'error', message: result.error || 'Failed to stop detection' }]);
                     }
                 } catch (error) {
                     setAlerts([...alerts, { type: 'error', message: 'Failed to stop detection' }]);
@@ -735,6 +1150,32 @@
             // Check if ready to start detection
             const canStartDetection = people.length > 0 && streams.length > 0;
 
+            // Helper functions for detection status
+            const getDetectionStatusLabel = (status) => {
+                switch (status) {
+                    case 'idle': return 'Detection Idle';
+                    case 'starting': return 'Initializing...';
+                    case 'loading_detector': return 'Loading Face Detector...';
+                    case 'loading_streams': return 'Connecting to Cameras...';
+                    case 'running': return 'Detection Active';
+                    case 'stopping': return 'Stopping...';
+                    case 'error': return 'Detection Error';
+                    default: return 'Unknown Status';
+                }
+            };
+
+            const getDetectionStatusColor = (status) => {
+                switch (status) {
+                    case 'running': return 'success';
+                    case 'starting':
+                    case 'loading_detector':
+                    case 'loading_streams':
+                    case 'stopping': return 'warning';
+                    case 'error': return 'error';
+                    default: return 'default';
+                }
+            };
+
             return (
                 <ThemeProvider theme={darkTheme}>
                     <Box className="dashboard-root">
@@ -743,11 +1184,16 @@
                                 <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
                                     Face Recognition System
                                 </Typography>
-                                <Chip 
-                                    label={detectionStatus === 'running' ? 'Detection Active' : 'Detection Idle'}
-                                    color={detectionStatus === 'running' ? 'success' : 'default'}
-                                    variant="outlined"
-                                />
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                    {(detectionStatus === 'starting' || detectionStatus === 'loading_detector' || detectionStatus === 'loading_streams' || detectionStatus === 'stopping') && (
+                                        <CircularProgress size={20} />
+                                    )}
+                                    <Chip 
+                                        label={getDetectionStatusLabel(detectionStatus)}
+                                        color={getDetectionStatusColor(detectionStatus)}
+                                        variant="outlined"
+                                    />
+                                </Box>
                             </Toolbar>
                         </AppBar>
 
@@ -791,28 +1237,125 @@
                                             Add Camera
                                         </Button>
                                         {canStartDetection && (
-                                            detectionStatus === 'idle' ? (
+                                            detectionStatus === 'idle' || detectionStatus === 'error' ? (
                                                 <Button
                                                     variant="contained"
                                                     color="success"
                                                     startIcon={<span className="material-icons">play_arrow</span>}
                                                     onClick={startDetection}
+                                                    disabled={detectionStatus === 'error'}
                                                 >
                                                     Start Detection
                                                 </Button>
                                             ) : (
                                                 <Button
                                                     variant="contained"
-                                                    color="error"
-                                                    startIcon={<span className="material-icons">stop</span>}
+                                                    color={detectionStatus === 'running' ? 'error' : 'warning'}
+                                                    startIcon={
+                                                        (detectionStatus === 'starting' || detectionStatus === 'loading_detector' || detectionStatus === 'loading_streams') 
+                                                        ? <CircularProgress size={20} color="inherit" />
+                                                        : <span className="material-icons">stop</span>
+                                                    }
                                                     onClick={stopDetection}
+                                                    disabled={detectionStatus === 'starting' || detectionStatus === 'loading_detector' || detectionStatus === 'loading_streams'}
                                                 >
-                                                    Stop Detection
+                                                    {detectionStatus === 'running' ? 'Stop Detection' : getDetectionStatusLabel(detectionStatus)}
                                                 </Button>
                                             )
                                         )}
+                                        <Button
+                                            variant="outlined"
+                                            color="info"
+                                            startIcon={<span className="material-icons">bug_report</span>}
+                                            onClick={testRtspConsole}
+                                            sx={{ ml: 1 }}
+                                        >
+                                            Test RTSP Console
+                                        </Button>
                                     </Box>
                                 </Box>
+
+                                {/* Detection Progress Indicator */}
+                                {(detectionStatus !== 'idle' && detectionStatus !== 'error') && (
+                                    <Box sx={{ mb: 3 }}>
+                                        <Paper sx={{ p: 2, backgroundColor: 'rgba(59, 130, 246, 0.1)' }}>
+                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                                                <CircularProgress size={24} />
+                                                <Box>
+                                                    <Typography variant="subtitle1" color="primary">
+                                                        {getDetectionStatusLabel(detectionStatus)}
+                                                    </Typography>
+                                                    {detectionMessage && (
+                                                        <Typography variant="body2" color="text.secondary">
+                                                            {detectionMessage}
+                                                        </Typography>
+                                                    )}
+                                                </Box>
+                                            </Box>
+                                        </Paper>
+                                    </Box>
+                                )}
+
+                                {/* Live Detection Feed */}
+                                {detectionStatus === 'running' && streams.length > 0 && (
+                                    <Box sx={{ mb: 3 }}>
+                                        <Typography variant="h6" sx={{ mb: 2 }}>Live Detection Feed</Typography>
+                                        <Grid container spacing={2}>
+                                            {streams.filter(s => s.active).map((stream) => (
+                                                <Grid item xs={12} sm={6} md={4} key={stream.id}>
+                                                    <Card>
+                                                        <CardContent>
+                                                            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                                                                {stream.name}
+                                                            </Typography>
+                                                            <Box 
+                                                                sx={{ 
+                                                                    position: 'relative', 
+                                                                    width: '100%', 
+                                                                    paddingBottom: '75%', // 4:3 aspect ratio
+                                                                    overflow: 'hidden',
+                                                                    borderRadius: 1,
+                                                                    backgroundColor: '#f5f5f5'
+                                                                }}
+                                                            >
+                                                                <img
+                                                                    src={`/api/detection/feed/${stream.id}`}
+                                                                    alt={`Live feed from ${stream.name}`}
+                                                                    style={{
+                                                                        position: 'absolute',
+                                                                        top: 0,
+                                                                        left: 0,
+                                                                        width: '100%',
+                                                                        height: '100%',
+                                                                        objectFit: 'cover'
+                                                                    }}
+                                                                    onError={(e) => {
+                                                                        e.target.style.display = 'none';
+                                                                    }}
+                                                                />
+                                                                <Box 
+                                                                    sx={{
+                                                                        position: 'absolute',
+                                                                        top: 8,
+                                                                        right: 8,
+                                                                        bgcolor: 'rgba(0,0,0,0.7)',
+                                                                        color: 'white',
+                                                                        px: 1,
+                                                                        py: 0.5,
+                                                                        borderRadius: 1,
+                                                                        fontSize: '0.75rem'
+                                                                    }}
+                                                                >
+                                                                    🔴 LIVE
+                                                                </Box>
+                                                            </Box>
+                                                        </CardContent>
+                                                    </Card>
+                                                </Grid>
+                                            ))}
+                                        </Grid>
+                                    </Box>
+                                )}
 
                                 <Grid container spacing={3}>
                                     {streams.map((stream) => (
@@ -880,6 +1423,33 @@
                                                             sx={{ mt: 1, mr: 1 }}
                                                         />
                                                     ))}
+                                                    <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
+                                                        <Button
+                                                            size="small"
+                                                            variant="outlined"
+                                                            startIcon={<span className="material-icons">edit</span>}
+                                                            onClick={() => {
+                                                                setEditPersonDialog(true);
+                                                                setEditingPerson(person);
+                                                            }}
+                                                        >
+                                                            Edit
+                                                        </Button>
+                                                        <Button
+                                                            size="small"
+                                                            variant="outlined"
+                                                            color="error"
+                                                            disabled={deletePersonLoading === person.id}
+                                                            startIcon={
+                                                                deletePersonLoading === person.id ? 
+                                                                <CircularProgress size={16} /> : 
+                                                                <span className="material-icons">delete</span>
+                                                            }
+                                                            onClick={() => handleDeletePerson(person)}
+                                                        >
+                                                            {deletePersonLoading === person.id ? 'Deleting...' : 'Delete'}
+                                                        </Button>
+                                                    </Box>
                                                 </CardContent>
                                             </Card>
                                         </Grid>
@@ -948,6 +1518,18 @@
                             open={addPersonDialog}
                             onClose={() => setAddPersonDialog(false)}
                             onAdd={handleAddPerson}
+                            loading={addPersonLoading}
+                        />
+
+                        <EditPersonDialog 
+                            open={editPersonDialog}
+                            onClose={() => {
+                                setEditPersonDialog(false);
+                                setEditingPerson(null);
+                            }}
+                            onEdit={handleEditPerson}
+                            person={editingPerson}
+                            loading={editPersonLoading}
                         />
 
                         {/* Snackbar for alerts */}

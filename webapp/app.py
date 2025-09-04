@@ -19,7 +19,7 @@ os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 logging.getLogger('onnxruntime').setLevel(logging.ERROR)
 logging.getLogger('insightface').setLevel(logging.ERROR)
 
-from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, Response, render_template_string
 from flask_socketio import SocketIO, emit
 import sqlite3
 import base64
@@ -28,10 +28,13 @@ import numpy as np
 import threading
 import time
 import json
+import shutil
 from datetime import datetime
 import pygame
 import pytz
 from collections import defaultdict
+import signal
+import concurrent.futures
 
 app = Flask(__name__, 
             template_folder='templates',
@@ -43,10 +46,10 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Database and directories
 DB_PATH = 'simple_face_recognition.db'
-ALERT_SOUND_FILE = '../archive/alert.mp3'
-GALLERY_FOLDER = '../gallery'
-PEOPLE_FOLDER = '../people'
-EMBEDDINGS_FOLDER = '../embeddings'
+ALERT_SOUND_FILE = 'alarm.mp3'  # Use local alarm file
+GALLERY_FOLDER = 'gallery'
+PEOPLE_FOLDER = 'people'
+EMBEDDINGS_FOLDER = 'embeddings'
 FACE_DB_PATH = os.path.join(EMBEDDINGS_FOLDER, 'face_db.pkl')
 
 # Ensure directories exist
@@ -54,10 +57,175 @@ os.makedirs(GALLERY_FOLDER, exist_ok=True)
 os.makedirs(PEOPLE_FOLDER, exist_ok=True)
 os.makedirs(EMBEDDINGS_FOLDER, exist_ok=True)
 
+def connect_camera_with_timeout(stream_url, timeout=10):
+    """Connect to camera with timeout - Ultra-aggressive RTSP optimization"""
+    def connect():
+        try:
+            print(f">> Creating VideoCapture for {stream_url}")
+            
+            # RTSP-specific optimizations
+            if 'rtsp://' in stream_url.lower():
+                print(f">> Applying ULTRA-AGGRESSIVE RTSP optimizations...")
+                
+                # Set global environment variables to force short timeouts
+                os.environ.update({
+                    'OPENCV_FFMPEG_CAPTURE_OPTIONS': (
+                        'rtsp_transport;tcp|'
+                        'stimeout;3000000|'      # 3 second stream timeout (microseconds)
+                        'rw_timeout;3000000|'    # 3 second read/write timeout
+                        'timeout;3000000|'       # 3 second general timeout
+                        'max_delay;1000000|'     # 1 second max delay
+                        'buffer_size;16384|'     # Small buffer
+                        'analyzeduration;500000|' # 0.5 second analysis duration
+                        'probesize;16384|'       # Very small probe size
+                        'fflags;nobuffer|'       # No buffering
+                        'flags;low_delay'        # Low delay flag
+                    ),
+                    'OPENCV_FFMPEG_READ_ATTEMPTS': '2',  # Only 2 read attempts
+                    'OPENCV_FFMPEG_WRITER_THREADS': '1'   # Single thread
+                })
+                
+                # Try different RTSP approaches with ultra-short timeouts
+                rtsp_configs = [
+                    {
+                        'url': f"{stream_url}?tcp=1&timeout=3",
+                        'backend': cv2.CAP_FFMPEG,
+                        'force_props': True
+                    },
+                    {
+                        'url': f"{stream_url}?buffer_size=0&timeout=3", 
+                        'backend': cv2.CAP_FFMPEG,
+                        'force_props': True
+                    },
+                    {
+                        'url': stream_url,
+                        'backend': cv2.CAP_FFMPEG,
+                        'force_props': True
+                    },
+                    {
+                        'url': stream_url.replace(':8554', ':554'),  # Standard port
+                        'backend': cv2.CAP_FFMPEG,
+                        'force_props': False
+                    }
+                ]
+                
+                for i, config in enumerate(rtsp_configs):
+                    print(f">> ULTRA-AGGRESSIVE RTSP attempt {i+1}: {config['url']}")
+                    
+                    try:
+                        # Create VideoCapture with specific backend
+                        cap = cv2.VideoCapture(config['url'], config['backend'])
+                        
+                        # Force ultra-short timeouts IMMEDIATELY
+                        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 3000)    # 3 second open
+                        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3000)    # 3 second read
+                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)              # Minimal buffer
+                        
+                        if config['force_props']:
+                            # Force resolution and FPS to speed up negotiation
+                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                            cap.set(cv2.CAP_PROP_FPS, 15)
+                            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('H', '2', '6', '4'))
+                        
+                        print(f">> Checking if VideoCapture {i+1} is opened...")
+                        if cap.isOpened():
+                            print(f">> VideoCapture {i+1} opened! Testing frame read with 3s timeout...")
+                            
+                            # Ultra-fast frame test with threading timeout (Windows compatible)
+                            frame_result = {'ret': False, 'frame': None, 'error': None, 'completed': False}
+                            
+                            def read_frame():
+                                try:
+                                    start_time = time.time()
+                                    ret, frame = cap.read()
+                                    end_time = time.time()
+                                    frame_result.update({
+                                        'ret': ret, 
+                                        'frame': frame, 
+                                        'read_time': end_time - start_time,
+                                        'completed': True
+                                    })
+                                except Exception as e:
+                                    frame_result.update({'error': str(e), 'completed': True})
+                            
+                            # Start frame reading in separate thread
+                            read_thread = threading.Thread(target=read_frame)
+                            read_thread.daemon = True
+                            read_thread.start()
+                            
+                            # Wait max 3 seconds for frame
+                            read_thread.join(timeout=3.0)
+                            
+                            if frame_result['completed']:
+                                ret = frame_result['ret']
+                                frame = frame_result['frame']
+                                read_time = frame_result.get('read_time', 0)
+                                
+                                print(f">> Frame read completed in {read_time:.3f}s, ret={ret}")
+                                
+                                if ret and frame is not None and frame.size > 0:
+                                    height, width = frame.shape[:2]
+                                    print(f">> 🎉 ULTRA SUCCESS! RTSP {i+1} works (size: {width}x{height}, time: {read_time:.3f}s)")
+                                    return cap, True, f"Ultra-fast RTSP success #{i+1} in {read_time:.3f}s"
+                                else:
+                                    print(f">> RTSP {i+1} read failed: frame_valid={frame is not None}")
+                                    cap.release()
+                            else:
+                                print(f">> RTSP {i+1} frame read timed out after 3s")
+                                cap.release()
+                        else:
+                            print(f">> RTSP {i+1} failed to open")
+                            cap.release()
+                    
+                    except Exception as config_err:
+                        print(f">> RTSP {i+1} config error: {config_err}")
+                        try:
+                            cap.release()
+                        except:
+                            pass
+                
+                # If all ultra-aggressive attempts fail
+                print(f">> All ULTRA-AGGRESSIVE RTSP attempts failed")
+                return None, False, "All ultra-aggressive RTSP attempts failed"
+            
+            else:
+                # Standard approach for HTTP streams
+                cap = cv2.VideoCapture(stream_url)
+                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout * 1000)
+                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10000)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                
+                print(f">> Checking if VideoCapture is opened...")
+                if cap.isOpened():
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        return cap, True, "HTTP stream success"
+                    else:
+                        cap.release()
+                        return None, False, "Cannot read HTTP frames"
+                else:
+                    return None, False, "Cannot open HTTP stream"
+                    
+        except Exception as e:
+            print(f">> Exception during connection: {e}")
+            return None, False, str(e)
+    
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(connect)
+        try:
+            cap, success, message = future.result(timeout=timeout)
+            return cap, success, message
+        except concurrent.futures.TimeoutError:
+            print(f">> ThreadPoolExecutor timeout after {timeout}s")
+            return None, False, f"Connection timeout after {timeout}s"
+
 # Global variables for detection
 detector = None
 detection_running = False
 detection_thread = None
+detection_frames = {}  # Store latest frames for each camera
+detection_results = {}  # Store latest detection results
 
 # Timezone configuration
 LOCAL_TIMEZONE = pytz.timezone('America/New_York')
@@ -121,7 +289,7 @@ def rebuild_face_database():
         return False
 
 def save_person_images(person_name, image_files):
-    """Save person images to people folder"""
+    """Save person images to people folder (from base64 data)"""
     person_folder = os.path.join(PEOPLE_FOLDER, person_name)
     os.makedirs(person_folder, exist_ok=True)
     
@@ -139,6 +307,22 @@ def save_person_images(person_name, image_files):
         with open(filepath, 'wb') as f:
             f.write(image_binary)
         
+        saved_files.append(filepath)
+    
+    return saved_files
+
+def save_person_images_from_files(person_name, image_files):
+    """Save person images to people folder (from uploaded files)"""
+    person_folder = os.path.join(PEOPLE_FOLDER, person_name)
+    os.makedirs(person_folder, exist_ok=True)
+    
+    saved_files = []
+    for i, image_file in enumerate(image_files):
+        filename = f"image_{i+1}.jpg"
+        filepath = os.path.join(person_folder, filename)
+        
+        # Save the uploaded file
+        image_file.save(filepath)
         saved_files.append(filepath)
     
     return saved_files
@@ -266,6 +450,656 @@ def test_camera():
     except Exception as e:
         return jsonify({'success': False, 'error': f'Camera test failed: {str(e)}'})
 
+# Global dictionary to store active camera streams for preview
+active_streams = {}
+
+@app.route('/api/camera/stream/<int:stream_id>')
+def video_stream(stream_id):
+    """Stream live video from camera"""
+    def generate_frames(camera_url):
+        cap = cv2.VideoCapture(camera_url)
+        if not cap.isOpened():
+            return
+        
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Resize frame for web streaming
+                height, width = frame.shape[:2]
+                if width > 640:
+                    ratio = 640 / width
+                    new_width = 640
+                    new_height = int(height * ratio)
+                    frame = cv2.resize(frame, (new_width, new_height))
+                
+                # Encode frame as JPEG
+                ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if not ret:
+                    continue
+                    
+                frame_bytes = buffer.tobytes()
+                
+                # Yield frame in multipart format
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                
+        finally:
+            cap.release()
+    
+    # Get camera URL from database
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT url FROM streams WHERE id = ? AND active = 1', (stream_id,))
+        result = cursor.fetchone()
+        conn.close()
+        
+        if not result:
+            from flask import Response
+            return Response("Camera not found", status=404)
+        
+        camera_url = result[0]
+        
+        from flask import Response
+        return Response(generate_frames(camera_url),
+                       mimetype='multipart/x-mixed-replace; boundary=frame')
+        
+    except Exception as e:
+        from flask import Response
+        return Response(f"Error: {str(e)}", status=500)
+
+def console_test_rtsp_stream():
+    """Console-based RTSP stream testing with extensive logging"""
+    print("\n" + "="*80)
+    print("🔬 CONSOLE RTSP STREAM TEST")
+    print("="*80)
+    
+    # Get stream from database
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, name, url FROM streams WHERE active = 1')
+        streams = cursor.fetchall()
+        conn.close()
+        
+        if not streams:
+            print("❌ No active streams found in database")
+            return
+        
+        stream_id, stream_name, stream_url = streams[0]
+        print(f"📡 Testing stream: {stream_name}")
+        print(f"🔗 URL: {stream_url}")
+        print(f"📊 Stream ID: {stream_id}")
+        
+    except Exception as e:
+        print(f"❌ Database error: {e}")
+        return
+    
+    print("\n" + "-"*60)
+    print("🎯 PHASE 1: OpenCV VideoCapture Creation")
+    print("-"*60)
+    
+    # Test 1: Basic VideoCapture creation
+    try:
+        print(f"⏳ Creating cv2.VideoCapture('{stream_url}')...")
+        cap = cv2.VideoCapture(stream_url)
+        print(f"✅ VideoCapture object created successfully")
+    except Exception as e:
+        print(f"❌ Failed to create VideoCapture: {e}")
+        return
+    
+    # Test 2: Check if opened
+    print(f"⏳ Checking if VideoCapture is opened...")
+    is_opened = cap.isOpened()
+    print(f"📊 cap.isOpened() = {is_opened}")
+    
+    if not is_opened:
+        print("❌ VideoCapture failed to open. Testing different approaches...")
+        cap.release()
+        
+        # Try with different backends
+        backends_to_try = [
+            (cv2.CAP_FFMPEG, "FFMPEG"),
+            (cv2.CAP_GSTREAMER, "GStreamer"),
+            (cv2.CAP_DSHOW, "DirectShow"),
+            (cv2.CAP_ANY, "Any Available")
+        ]
+        
+        for backend, name in backends_to_try:
+            try:
+                print(f"⏳ Trying backend: {name}")
+                cap = cv2.VideoCapture(stream_url, backend)
+                if cap.isOpened():
+                    print(f"✅ Success with {name} backend!")
+                    break
+                else:
+                    print(f"❌ Failed with {name} backend")
+                    cap.release()
+            except Exception as e:
+                print(f"❌ Exception with {name} backend: {e}")
+        
+        if not cap.isOpened():
+            print("❌ All backends failed. Stream URL might be invalid.")
+            return
+    
+    print("\n" + "-"*60)
+    print("🎯 PHASE 2: VideoCapture Properties")
+    print("-"*60)
+    
+    # Get and display all relevant properties
+    properties = [
+        (cv2.CAP_PROP_FRAME_WIDTH, "Frame Width"),
+        (cv2.CAP_PROP_FRAME_HEIGHT, "Frame Height"),
+        (cv2.CAP_PROP_FPS, "FPS"),
+        (cv2.CAP_PROP_FOURCC, "FOURCC Codec"),
+        (cv2.CAP_PROP_FRAME_COUNT, "Frame Count"),
+        (cv2.CAP_PROP_BUFFERSIZE, "Buffer Size"),
+        (cv2.CAP_PROP_POS_FRAMES, "Current Frame Position"),
+    ]
+    
+    for prop_id, prop_name in properties:
+        try:
+            value = cap.get(prop_id)
+            if prop_id == cv2.CAP_PROP_FOURCC:
+                # Convert FOURCC to readable format
+                fourcc_int = int(value)
+                fourcc_str = ''.join([chr((fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
+                print(f"📊 {prop_name}: {fourcc_int} ({fourcc_str})")
+            else:
+                print(f"📊 {prop_name}: {value}")
+        except Exception as e:
+            print(f"❌ Error getting {prop_name}: {e}")
+    
+    print("\n" + "-"*60)
+    print("🎯 PHASE 3: Frame Reading Tests")
+    print("-"*60)
+    
+    # Test frame reading with detailed logging
+    frame_test_count = 10
+    successful_reads = 0
+    
+    for i in range(frame_test_count):
+        print(f"⏳ Reading frame {i+1}/{frame_test_count}...")
+        
+        start_time = time.time()
+        ret, frame = cap.read()
+        read_time = time.time() - start_time
+        
+        print(f"📊 Frame {i+1} read time: {read_time:.3f}s")
+        print(f"📊 Frame {i+1} ret value: {ret}")
+        
+        if ret and frame is not None:
+            height, width, channels = frame.shape
+            print(f"📊 Frame {i+1} shape: {width}x{height}x{channels}")
+            print(f"📊 Frame {i+1} dtype: {frame.dtype}")
+            print(f"📊 Frame {i+1} size: {frame.size} bytes")
+            print(f"✅ Frame {i+1} read successfully!")
+            successful_reads += 1
+            
+            # Save first successful frame for inspection
+            if successful_reads == 1:
+                try:
+                    test_image_path = "rtsp_test_frame.jpg"
+                    cv2.imwrite(test_image_path, frame)
+                    print(f"💾 Saved test frame to: {test_image_path}")
+                except Exception as e:
+                    print(f"❌ Failed to save test frame: {e}")
+                    
+        else:
+            print(f"❌ Frame {i+1} read failed!")
+            if frame is None:
+                print(f"📊 Frame {i+1} is None")
+            else:
+                print(f"📊 Frame {i+1} exists but ret=False")
+        
+        print(f"⏱️ Waiting 1 second before next frame...")
+        time.sleep(1)
+        print()
+    
+    print("\n" + "-"*60)
+    print("🎯 PHASE 4: Results Summary")
+    print("-"*60)
+    
+    success_rate = (successful_reads / frame_test_count) * 100
+    print(f"📊 Total frames attempted: {frame_test_count}")
+    print(f"📊 Successful frame reads: {successful_reads}")
+    print(f"📊 Success rate: {success_rate:.1f}%")
+    
+    if success_rate >= 80:
+        print("✅ RTSP stream is working well!")
+        print("🔧 Issue might be with the web interface or threading")
+    elif success_rate >= 50:
+        print("⚠️ RTSP stream is partially working")
+        print("🔧 Stream might be unstable or have intermittent issues")
+    else:
+        print("❌ RTSP stream has serious issues")
+        print("🔧 Consider checking:")
+        print("   - Network connectivity")
+        print("   - Camera settings")
+        print("   - Codec compatibility")
+        print("   - DVR configuration")
+    
+    # Test 5: Continuous reading test
+    print("\n" + "-"*60)
+    print("🎯 PHASE 5: Continuous Reading Test (10 seconds)")
+    print("-"*60)
+    
+    print("⏳ Starting continuous reading for 10 seconds...")
+    print("📺 Press Ctrl+C to stop early if needed")
+    
+    start_time = time.time()
+    continuous_frames = 0
+    continuous_errors = 0
+    
+    try:
+        while (time.time() - start_time) < 10:
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                continuous_frames += 1
+                if continuous_frames % 5 == 0:  # Log every 5th frame
+                    elapsed = time.time() - start_time
+                    fps = continuous_frames / elapsed if elapsed > 0 else 0
+                    print(f"📊 {continuous_frames} frames read, {fps:.1f} FPS, {elapsed:.1f}s elapsed")
+            else:
+                continuous_errors += 1
+                if continuous_errors % 5 == 0:  # Log every 5th error
+                    print(f"❌ {continuous_errors} read errors so far")
+            
+            time.sleep(0.1)  # Small delay
+            
+    except KeyboardInterrupt:
+        print("\n⏹️ Stopped by user")
+    
+    elapsed_total = time.time() - start_time
+    final_fps = continuous_frames / elapsed_total if elapsed_total > 0 else 0
+    
+    print(f"\n📊 Continuous test results:")
+    print(f"📊 Duration: {elapsed_total:.1f}s")
+    print(f"📊 Frames read: {continuous_frames}")
+    print(f"📊 Errors: {continuous_errors}")
+    print(f"📊 Average FPS: {final_fps:.1f}")
+    print(f"📊 Error rate: {(continuous_errors/(continuous_frames+continuous_errors)*100):.1f}%")
+    
+    # Cleanup
+    cap.release()
+    print("\n🧹 VideoCapture released")
+    print("="*80)
+    print("🏁 RTSP STREAM TEST COMPLETED")
+    print("="*80)
+
+# Add route to trigger console test
+@app.route('/api/test/rtsp-console')
+def test_rtsp_console():
+    """Trigger console RTSP test"""
+    import threading
+    test_thread = threading.Thread(target=console_test_rtsp_stream, daemon=True)
+    test_thread.start()
+    return jsonify({'message': 'RTSP console test started - check terminal output'})
+
+@app.route('/api/detection/test-popup')
+def detection_test_popup():
+    """Open popup window for testing camera detection"""
+    return render_template_string("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Face Detection Test - Live Stream</title>
+        <style>
+            body {
+                margin: 0;
+                padding: 20px;
+                background: #1a1a1a;
+                color: white;
+                font-family: Arial, sans-serif;
+                text-align: center;
+            }
+            .container {
+                max-width: 1200px;
+                margin: 0 auto;
+            }
+            .status {
+                padding: 15px;
+                margin-bottom: 20px;
+                border-radius: 8px;
+                font-weight: bold;
+            }
+            .status.connecting {
+                background: #ff9800;
+                color: white;
+            }
+            .status.connected {
+                background: #4caf50;
+                color: white;
+            }
+            .status.error {
+                background: #f44336;
+                color: white;
+            }
+            .video-container {
+                border: 2px solid #333;
+                border-radius: 8px;
+                overflow: hidden;
+                margin: 20px auto;
+                max-width: 800px;
+                background: #000;
+                min-height: 400px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .video-stream {
+                max-width: 100%;
+                height: auto;
+            }
+            .loading {
+                color: #999;
+                font-size: 18px;
+            }
+            .info {
+                background: #333;
+                padding: 15px;
+                border-radius: 8px;
+                margin-top: 20px;
+                text-align: left;
+            }
+            .close-btn {
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                background: #f44336;
+                color: white;
+                border: none;
+                padding: 10px 15px;
+                border-radius: 5px;
+                cursor: pointer;
+            }
+        </style>
+    </head>
+    <body>
+        <button class="close-btn" onclick="window.close()">Close</button>
+        
+        <div class="container">
+            <h1>🎥 Face Detection Test Stream</h1>
+            
+            <div id="status" class="status connecting">
+                🔄 Initializing camera connection...
+            </div>
+            
+            <div class="video-container">
+                <img id="videoStream" class="video-stream" style="display: none;" />
+                <div id="loading" class="loading">
+                    📡 Waiting for video stream...
+                </div>
+            </div>
+            
+            <div class="info">
+                <h3>Connection Details:</h3>
+                <div id="streamInfo">
+                    <p>🔗 <strong>Stream URL:</strong> <span id="streamUrl">Loading...</span></p>
+                    <p>📊 <strong>Status:</strong> <span id="streamStatus">Initializing...</span></p>
+                    <p>⏱️ <strong>Started:</strong> <span id="startTime">{{ start_time }}</span></p>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
+        <script>
+            let socket;
+            
+            // Initialize socket connection
+            try {
+                socket = io();
+            } catch (error) {
+                console.error('Failed to initialize socket:', error);
+                document.getElementById('status').textContent = '❌ Failed to connect to server';
+                document.getElementById('status').className = 'status error';
+            }
+            
+            const statusDiv = document.getElementById('status');
+            const videoStream = document.getElementById('videoStream');
+            const loading = document.getElementById('loading');
+            const streamUrl = document.getElementById('streamUrl');
+            const streamStatus = document.getElementById('streamStatus');
+            
+            if (socket) {
+                // Listen for detection status updates
+                socket.on('detection_status', (data) => {
+                    console.log('Detection status:', data);
+                    statusDiv.textContent = data.message || data.status;
+                    streamStatus.textContent = data.status;
+                    
+                    if (data.status === 'running') {
+                        statusDiv.className = 'status connected';
+                        statusDiv.textContent = '✅ Camera connected - Starting video stream...';
+                        
+                        // Start trying to load the video stream
+                        tryLoadVideoStream();
+                    } else if (data.status === 'error') {
+                        statusDiv.className = 'status error';
+                        streamStatus.textContent = 'Error: ' + (data.message || 'Connection failed');
+                    }
+                });
+                
+                socket.on('detection_error', (data) => {
+                    console.log('Detection error:', data);
+                    statusDiv.className = 'status error';
+                    statusDiv.textContent = '❌ ' + (data.error || 'Connection failed');
+                    streamStatus.textContent = 'Error: ' + data.error;
+                });
+                
+                socket.on('connect', () => {
+                    console.log('Socket connected to server');
+                    statusDiv.textContent = '🔗 Connected to server, waiting for camera...';
+                });
+                
+                socket.on('disconnect', () => {
+                    console.log('Socket disconnected from server');
+                    statusDiv.className = 'status error';
+                    statusDiv.textContent = '🔌 Disconnected from server';
+                });
+            }
+            
+            function tryLoadVideoStream() {
+                // Try to load the detection feed for stream ID 1
+                const feedUrl = '/api/detection/feed/1?' + new Date().getTime();
+                streamUrl.textContent = feedUrl;
+                
+                console.log('Attempting to load video stream:', feedUrl);
+                
+                videoStream.onload = function() {
+                    console.log('Video stream loaded successfully');
+                    loading.style.display = 'none';
+                    videoStream.style.display = 'block';
+                    statusDiv.textContent = '🎥 Live stream active with face detection';
+                };
+                
+                videoStream.onerror = function() {
+                    console.log('Failed to load video stream, retrying in 2 seconds...');
+                    setTimeout(() => {
+                        tryLoadVideoStream();
+                    }, 2000);
+                };
+                
+                // Add a test to see if the endpoint exists
+                fetch(feedUrl, { method: 'HEAD' })
+                    .then(response => {
+                        console.log('Feed endpoint response:', response.status);
+                        if (response.ok) {
+                            videoStream.src = feedUrl;
+                        } else {
+                            console.log('Feed endpoint not ready, retrying...');
+                            setTimeout(() => {
+                                tryLoadVideoStream();
+                            }, 2000);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error checking feed endpoint:', error);
+                        setTimeout(() => {
+                            tryLoadVideoStream();
+                        }, 2000);
+                    });
+            }
+            
+            // Auto-retry connection if it fails
+            setTimeout(() => {
+                if (streamStatus.textContent === 'Initializing...') {
+                    statusDiv.className = 'status error';
+                    statusDiv.textContent = '⚠️ Connection timeout - Check camera settings';
+                }
+            }, 60000); // 60 second timeout
+        </script>
+    </body>
+    </html>
+    """, start_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+
+@app.route('/api/camera/preview')
+def camera_preview():
+    """Serve camera preview page"""
+    camera_url = request.args.get('url', '')
+    camera_name = request.args.get('name', 'Camera')
+    
+    if not camera_url:
+        return "Camera URL required", 400
+    
+    # Create a temporary stream entry for preview
+    temp_id = abs(hash(camera_url)) % 10000
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Camera Preview - {camera_name}</title>
+        <style>
+            body {{
+                margin: 0;
+                padding: 20px;
+                background: #f5f5f5;
+                font-family: Arial, sans-serif;
+            }}
+            .container {{
+                max-width: 800px;
+                margin: 0 auto;
+                text-align: center;
+            }}
+            .video-container {{
+                border: 2px solid #ddd;
+                border-radius: 8px;
+                overflow: hidden;
+                display: inline-block;
+                background: #000;
+            }}
+            img {{
+                max-width: 100%;
+                height: auto;
+                display: block;
+            }}
+            .info {{
+                margin: 20px 0;
+                padding: 15px;
+                background: white;
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }}
+            .close-btn {{
+                padding: 10px 20px;
+                background: #1976d2;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 16px;
+            }}
+            .close-btn:hover {{
+                background: #1565c0;
+            }}
+            .status {{
+                color: green;
+                font-weight: bold;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h2>{camera_name} - Live Preview</h2>
+            
+            <div class="info">
+                <p><strong>URL:</strong> {camera_url}</p>
+                <p><strong>Status:</strong> <span class="status">🟢 Live Streaming</span></p>
+            </div>
+            
+            <div class="video-container">
+                <img id="videoStream" src="/api/camera/stream_url?url={camera_url}" alt="Live Camera Stream">
+            </div>
+            
+            <br><br>
+            <button class="close-btn" onclick="window.close()">Close Preview</button>
+        </div>
+        
+        <script>
+            // Handle stream errors
+            document.getElementById('videoStream').onerror = function() {{
+                this.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQwIiBoZWlnaHQ9IjQ4MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxOCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkNhbWVyYSBTdHJlYW0gVW5hdmFpbGFibGU8L3RleHQ+PC9zdmc+';
+                document.querySelector('.status').innerHTML = '🔴 Stream Disconnected';
+                document.querySelector('.status').style.color = 'red';
+            }};
+        </script>
+    </body>
+    </html>
+    """
+    
+    from flask import Response
+    return Response(html_content, mimetype='text/html')
+
+@app.route('/api/camera/stream_url')
+def video_stream_by_url():
+    """Stream live video from camera URL"""
+    camera_url = request.args.get('url', '')
+    
+    if not camera_url:
+        from flask import Response
+        return Response("Camera URL required", status=400)
+    
+    def generate_frames(url):
+        cap = cv2.VideoCapture(url)
+        if not cap.isOpened():
+            return
+        
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Resize frame for web streaming
+                height, width = frame.shape[:2]
+                if width > 640:
+                    ratio = 640 / width
+                    new_width = 640
+                    new_height = int(height * ratio)
+                    frame = cv2.resize(frame, (new_width, new_height))
+                
+                # Encode frame as JPEG
+                ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if not ret:
+                    continue
+                    
+                frame_bytes = buffer.tobytes()
+                
+                # Yield frame in multipart format
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                
+        finally:
+            cap.release()
+    
+    from flask import Response
+    return Response(generate_frames(camera_url),
+                   mimetype='multipart/x-mixed-replace; boundary=frame')
+
 @app.route('/api/streams', methods=['POST'])
 def add_stream():
     """Add a new camera stream"""
@@ -330,28 +1164,39 @@ def delete_stream(stream_id):
 def add_person():
     """Add a new person with images"""
     try:
-        data = request.get_json()
-        name = data.get('name', '')
-        images = data.get('images', [])
+        # Handle FormData from frontend
+        name = request.form.get('name', '').strip()
         
         if not name:
             return jsonify({'success': False, 'error': 'Name is required'})
         
-        if not images:
+        # Get image files from FormData
+        image_files = []
+        for key in request.files:
+            if key.startswith('image_'):
+                image_file = request.files[key]
+                if image_file and image_file.filename:
+                    image_files.append(image_file)
+        
+        if not image_files:
             return jsonify({'success': False, 'error': 'At least one image is required'})
         
         # Save person to database
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        cursor.execute('INSERT INTO people (name) VALUES (?)', (name,))
-        person_id = cursor.lastrowid
+        try:
+            cursor.execute('INSERT INTO people (name) VALUES (?)', (name,))
+            person_id = cursor.lastrowid
+            conn.commit()
+        except sqlite3.IntegrityError:
+            conn.close()
+            return jsonify({'success': False, 'error': f'Person with name "{name}" already exists'})
         
-        conn.commit()
         conn.close()
         
         # Save images to people folder
-        saved_files = save_person_images(name, images)
+        saved_files = save_person_images_from_files(name, image_files)
         
         # Rebuild face database
         rebuild_face_database()
@@ -366,6 +1211,122 @@ def add_person():
     except Exception as e:
         return jsonify({'success': False, 'error': f'Failed to add person: {str(e)}'})
 
+@app.route('/api/people/<int:person_id>', methods=['DELETE'])
+def delete_person(person_id):
+    """Delete a person and their images"""
+    try:
+        # Get person info first
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT name FROM people WHERE id = ?', (person_id,))
+        result = cursor.fetchone()
+        
+        if not result:
+            conn.close()
+            return jsonify({'success': False, 'error': 'Person not found'})
+        
+        person_name = result[0]
+        
+        # Delete from database
+        cursor.execute('DELETE FROM people WHERE id = ?', (person_id,))
+        cursor.execute('DELETE FROM detections WHERE person_name = ?', (person_name,))
+        conn.commit()
+        conn.close()
+        
+        # Delete person folder and images
+        person_folder = os.path.join(PEOPLE_FOLDER, person_name)
+        if os.path.exists(person_folder):
+            shutil.rmtree(person_folder)
+        
+        # Rebuild face database
+        rebuild_face_database()
+        
+        return jsonify({
+            'success': True, 
+            'message': f'Person {person_name} deleted successfully'
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Failed to delete person: {str(e)}'})
+
+@app.route('/api/people/<int:person_id>', methods=['PUT'])
+def edit_person(person_id):
+    """Edit a person's name and/or images"""
+    try:
+        # Get current person info
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT name FROM people WHERE id = ?', (person_id,))
+        result = cursor.fetchone()
+        
+        if not result:
+            conn.close()
+            return jsonify({'success': False, 'error': 'Person not found'})
+        
+        old_name = result[0]
+        new_name = request.form.get('name', '').strip()
+        
+        if not new_name:
+            return jsonify({'success': False, 'error': 'Name is required'})
+        
+        # Check if new name already exists (but not for the same person)
+        cursor.execute('SELECT id FROM people WHERE name = ? AND id != ?', (new_name, person_id))
+        if cursor.fetchone():
+            conn.close()
+            return jsonify({'success': False, 'error': f'Person with name "{new_name}" already exists'})
+        
+        # Update database
+        cursor.execute('UPDATE people SET name = ? WHERE id = ?', (new_name, person_id))
+        cursor.execute('UPDATE detections SET person_name = ? WHERE person_name = ?', (new_name, old_name))
+        conn.commit()
+        conn.close()
+        
+        # Handle folder rename if name changed
+        old_folder = os.path.join(PEOPLE_FOLDER, old_name)
+        new_folder = os.path.join(PEOPLE_FOLDER, new_name)
+        
+        if old_name != new_name and os.path.exists(old_folder):
+            os.rename(old_folder, new_folder)
+        
+        # Handle image removal if specified
+        remove_images_json = request.form.get('remove_images')
+        if remove_images_json:
+            try:
+                images_to_remove = json.loads(remove_images_json)
+                for filename in images_to_remove:
+                    image_path = os.path.join(new_folder, filename)
+                    if os.path.exists(image_path):
+                        os.remove(image_path)
+            except Exception as e:
+                print(f"Error removing images: {e}")
+        
+        # Handle new images if provided
+        image_files = []
+        for key in request.files:
+            if key.startswith('image_'):
+                image_file = request.files[key]
+                if image_file and image_file.filename:
+                    image_files.append(image_file)
+        
+        if image_files:
+            # Save new images (don't remove old ones unless specifically requested)
+            save_person_images_from_files(new_name, image_files)
+        
+        # Rebuild face database
+        rebuild_face_database()
+        
+        return jsonify({
+            'success': True, 
+            'message': f'Person updated successfully',
+            'person_id': person_id,
+            'new_name': new_name
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Failed to edit person: {str(e)}'})
+
 @app.route('/api/people')
 def get_people():
     """Get all people"""
@@ -377,12 +1338,114 @@ def get_people():
         rows = cursor.fetchall()
         conn.close()
         
-        people = [{'id': row[0], 'name': row[1], 'created_at': row[2]} for row in rows]
+        people = []
+        for row in rows:
+            person_id, name, created_at = row
+            
+            # Count images for this person
+            person_folder = os.path.join(PEOPLE_FOLDER, name)
+            image_count = 0
+            if os.path.exists(person_folder):
+                image_files = [f for f in os.listdir(person_folder) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                image_count = len(image_files)
+            
+            people.append({
+                'id': person_id, 
+                'name': name, 
+                'created_at': created_at,
+                'image_count': image_count
+            })
         
         return jsonify({'success': True, 'people': people})
         
     except Exception as e:
         return jsonify({'success': False, 'error': f'Failed to load people: {str(e)}', 'people': []})
+
+@app.route('/api/people/<int:person_id>/image')
+def get_person_image(person_id):
+    """Get the first image for a person"""
+    try:
+        # Get person name from database
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT name FROM people WHERE id = ?', (person_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return jsonify({'error': 'Person not found'}), 404
+        
+        person_name = row[0]
+        person_folder = os.path.join(PEOPLE_FOLDER, person_name)
+        
+        # Look for the first image file
+        if os.path.exists(person_folder):
+            for filename in sorted(os.listdir(person_folder)):
+                if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    image_path = os.path.join(person_folder, filename)
+                    return send_file(image_path, mimetype='image/jpeg')
+        
+        return jsonify({'error': 'No image found'}), 404
+        
+    except Exception as e:
+        return jsonify({'error': f'Failed to load image: {str(e)}'}), 500
+
+@app.route('/api/people/<int:person_id>/images')
+def get_person_images(person_id):
+    """Get all images for a person"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT name FROM people WHERE id = ?', (person_id,))
+        result = cursor.fetchone()
+        conn.close()
+        
+        if not result:
+            return jsonify({'error': 'Person not found'}), 404
+        
+        person_name = result[0]
+        person_folder = os.path.join(PEOPLE_FOLDER, person_name)
+        
+        images = []
+        if os.path.exists(person_folder):
+            for filename in sorted(os.listdir(person_folder)):
+                if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    images.append({
+                        'filename': filename,
+                        'url': f'/api/people/{person_id}/images/{filename}'
+                    })
+        
+        return jsonify({'success': True, 'images': images})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Failed to load images: {str(e)}'})
+
+@app.route('/api/people/<int:person_id>/images/<filename>')
+def get_person_image_by_filename(person_id, filename):
+    """Get a specific image file for a person"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT name FROM people WHERE id = ?', (person_id,))
+        result = cursor.fetchone()
+        conn.close()
+        
+        if not result:
+            return jsonify({'error': 'Person not found'}), 404
+        
+        person_name = result[0]
+        person_folder = os.path.join(PEOPLE_FOLDER, person_name)
+        image_path = os.path.join(person_folder, filename)
+        
+        if os.path.exists(image_path) and filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+            return send_file(image_path, mimetype='image/jpeg')
+        
+        return jsonify({'error': 'Image not found'}), 404
+        
+    except Exception as e:
+        return jsonify({'error': f'Failed to load image: {str(e)}'}), 500
 
 @app.route('/api/detection/start', methods=['POST'])
 def start_detection():
@@ -442,26 +1505,69 @@ def start_detection():
                 
                 # Initialize camera captures
                 camera_caps = {}
-                for stream_id, stream_name, stream_url in active_streams:
+                socketio.emit('detection_status', {'status': 'loading_streams', 'message': f'Testing {len(active_streams)} camera connections...'})
+                
+                for i, (stream_id, stream_name, stream_url) in enumerate(active_streams):
+                    status_msg = f'Connecting to "{stream_name}" ({i+1}/{len(active_streams)})...'
+                    socketio.emit('detection_status', {
+                        'status': 'loading_streams', 
+                        'message': status_msg
+                    })
+                    print(f">> {status_msg}")
+                    time.sleep(0.1)  # Give time for message to be sent
+                    
                     try:
-                        cap = cv2.VideoCapture(stream_url)
-                        if cap.isOpened():
+                        # Use timeout wrapper for camera connection
+                        # Use longer timeout for RTSP streams as they need more time to establish connection
+                        timeout_duration = 60 if 'rtsp://' in stream_url.lower() else 15
+                        print(f">> Attempting connection to {stream_name} at {stream_url}")
+                        cap, success, message = connect_camera_with_timeout(stream_url, timeout=timeout_duration)
+                        
+                        if success and cap:
                             camera_caps[stream_id] = {
                                 'cap': cap,
                                 'name': stream_name,
                                 'url': stream_url
                             }
+                            success_msg = f'✅ Connected to "{stream_name}" ({i+1}/{len(active_streams)})'
                             print(f">> Connected to camera: {stream_name}")
+                            socketio.emit('detection_status', {
+                                'status': 'loading_streams', 
+                                'message': success_msg
+                            })
                         else:
-                            print(f">> Failed to connect to camera: {stream_name}")
+                            error_msg = f'❌ {message} for "{stream_name}" ({i+1}/{len(active_streams)})'
+                            print(f">> Failed to connect to {stream_name}: {message}")
+                            socketio.emit('detection_status', {
+                                'status': 'loading_streams', 
+                                'message': error_msg
+                            })
+                            # Add a delay to let frontend show the error
+                            time.sleep(1)
                     except Exception as e:
+                        error_msg = f'❌ Error with "{stream_name}": {str(e)[:50]}...'
                         print(f">> Error connecting to {stream_name}: {e}")
+                        socketio.emit('detection_status', {
+                            'status': 'loading_streams', 
+                            'message': error_msg
+                        })
+                        # Add a delay to let frontend show the error
+                        time.sleep(1)
+                    
+                    # Small delay between connections
+                    time.sleep(0.2)
                 
                 if not camera_caps:
-                    socketio.emit('detection_error', {'error': 'No cameras could be connected'})
+                    error_message = 'No cameras could be connected. Please check your camera URLs and try again.'
+                    print(f">> {error_message}")
+                    socketio.emit('detection_error', {'error': error_message})
+                    socketio.emit('detection_status', {'status': 'error', 'message': error_message})
                     return
                 
-                socketio.emit('detection_status', {'status': 'running', 'message': f'Monitoring {len(camera_caps)} cameras'})
+                socketio.emit('detection_status', {
+                    'status': 'running', 
+                    'message': f'🎥 Monitoring {len(camera_caps)} camera{"s" if len(camera_caps) > 1 else ""}'
+                })
                 
                 frame_count = 0
                 while detection_running:
@@ -476,8 +1582,31 @@ def start_detection():
                         
                         ret, frame = cap.read()
                         if not ret:
-                            print(f">> Lost connection to {stream_name}")
-                            continue
+                            print(f">> Lost connection to {stream_name}, attempting reconnect...")
+                            # Try to reconnect
+                            cap.release()
+                            try:
+                                new_cap = cv2.VideoCapture(stream_data['url'])
+                                if new_cap.isOpened():
+                                    ret, frame = new_cap.read()
+                                    if ret:
+                                        camera_caps[stream_id]['cap'] = new_cap
+                                        print(f">> Reconnected to {stream_name}")
+                                        # Store frame for live feed
+                                        detection_frames[stream_id] = frame.copy()
+                                    else:
+                                        new_cap.release()
+                                        print(f">> Reconnection failed for {stream_name}")
+                                        continue
+                                else:
+                                    print(f">> Cannot reconnect to {stream_name}")
+                                    continue
+                            except Exception as e:
+                                print(f">> Reconnection error for {stream_name}: {e}")
+                                continue
+                        else:
+                            # Store frame for live feed
+                            detection_frames[stream_id] = frame.copy()
                         
                         # Process every 5th frame to reduce CPU load
                         if frame_count % 5 != 0:
@@ -485,6 +1614,9 @@ def start_detection():
                         
                         # Process frame for face detection
                         result = process_frame(frame, detector)
+                        
+                        # Store detection result for live feed
+                        detection_results[stream_id] = result
                         
                         if result and result.get('detected'):
                             person_name = result.get('name', 'Unknown')
@@ -590,6 +1722,69 @@ def get_detections():
         
     except Exception as e:
         return jsonify({'success': False, 'error': f'Failed to load detections: {str(e)}', 'detections': []})
+
+@app.route('/api/detection/feed/<int:stream_id>')
+def detection_feed(stream_id):
+    """Live detection video feed for a specific camera"""
+    print(f">> Detection feed requested for stream {stream_id}")
+    
+    def generate():
+        frame_count = 0
+        while detection_running:
+            frame_count += 1
+            if stream_id in detection_frames:
+                frame_data = detection_frames[stream_id]
+                if frame_data is not None:
+                    try:
+                        # Draw detection boxes if available
+                        frame = frame_data.copy()
+                        if stream_id in detection_results:
+                            result = detection_results[stream_id]
+                            if result and result.get('detected'):
+                                bbox = result.get('bbox')
+                                name = result.get('name', 'Unknown')
+                                confidence = result.get('confidence', 0.0)
+                                
+                                if bbox is not None:
+                                    x1, y1, x2, y2 = bbox
+                                    # Draw bounding box
+                                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                    # Draw label
+                                    label = f"{name} ({confidence:.1%})"
+                                    cv2.putText(frame, label, (x1, y1-10), 
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        
+                        # Encode frame as JPEG
+                        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                        if ret:
+                            frame_bytes = buffer.tobytes()
+                            yield (b'--frame\r\n'
+                                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                            
+                            # Debug every 30 frames
+                            if frame_count % 30 == 0:
+                                print(f">> Streaming frame {frame_count} for stream {stream_id}")
+                    except Exception as e:
+                        print(f">> Error generating frame for stream {stream_id}: {e}")
+            else:
+                # No frame available yet, send a placeholder or wait
+                if frame_count % 10 == 0:
+                    print(f">> No frame available for stream {stream_id} (frame {frame_count})")
+            
+            time.sleep(0.1)  # Control frame rate
+        
+        print(f">> Detection feed ended for stream {stream_id}")
+    
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/api/detection/status')
+def detection_status():
+    """Get current detection status"""
+    return jsonify({
+        'running': detection_running,
+        'active_cameras': len(detection_frames),
+        'recent_detections': len(detection_results)
+    })
 
 def initialize_app():
     """Initialize the application"""

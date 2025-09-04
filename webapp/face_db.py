@@ -13,8 +13,8 @@ def build_face_embeddings():
     app.prepare(ctx_id=-1)
     
     # Use the webapp's people directory
-    base_dir = '../people'
-    output_path = '../embeddings/face_db.pkl'
+    base_dir = 'people'
+    output_path = 'embeddings/face_db.pkl'
     
     # Ensure output directory exists
     os.makedirs(os.path.dirname(output_path), exist_ok=True)

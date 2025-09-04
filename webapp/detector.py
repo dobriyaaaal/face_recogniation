@@ -16,7 +16,7 @@ def initialize_detector():
         app.prepare(ctx_id=-1)
         
         # Load face database
-        face_db_path = '../embeddings/face_db.pkl'
+        face_db_path = 'embeddings/face_db.pkl'
         known_faces = {}
         
         if os.path.exists(face_db_path):
