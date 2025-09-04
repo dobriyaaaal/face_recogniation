@@ -58,82 +58,50 @@ os.makedirs(PEOPLE_FOLDER, exist_ok=True)
 os.makedirs(EMBEDDINGS_FOLDER, exist_ok=True)
 
 def connect_camera_with_timeout(stream_url, timeout=10):
-    """Connect to camera with timeout - Ultra-aggressive RTSP optimization"""
+    """Connect to camera with timeout - Working RTSP optimization"""
     def connect():
         try:
             print(f">> Creating VideoCapture for {stream_url}")
             
             # RTSP-specific optimizations
             if 'rtsp://' in stream_url.lower():
-                print(f">> Applying ULTRA-AGGRESSIVE RTSP optimizations...")
+                print(f">> Applying working RTSP optimizations...")
                 
-                # Set global environment variables to force short timeouts
-                os.environ.update({
-                    'OPENCV_FFMPEG_CAPTURE_OPTIONS': (
-                        'rtsp_transport;tcp|'
-                        'stimeout;3000000|'      # 3 second stream timeout (microseconds)
-                        'rw_timeout;3000000|'    # 3 second read/write timeout
-                        'timeout;3000000|'       # 3 second general timeout
-                        'max_delay;1000000|'     # 1 second max delay
-                        'buffer_size;16384|'     # Small buffer
-                        'analyzeduration;500000|' # 0.5 second analysis duration
-                        'probesize;16384|'       # Very small probe size
-                        'fflags;nobuffer|'       # No buffering
-                        'flags;low_delay'        # Low delay flag
-                    ),
-                    'OPENCV_FFMPEG_READ_ATTEMPTS': '2',  # Only 2 read attempts
-                    'OPENCV_FFMPEG_WRITER_THREADS': '1'   # Single thread
-                })
-                
-                # Try different RTSP approaches with ultra-short timeouts
+                # Try the approaches that work (based on test results)
                 rtsp_configs = [
                     {
                         'url': f"{stream_url}?tcp=1&timeout=3",
                         'backend': cv2.CAP_FFMPEG,
-                        'force_props': True
+                        'description': 'TCP with timeout parameters'
                     },
                     {
                         'url': f"{stream_url}?buffer_size=0&timeout=3", 
                         'backend': cv2.CAP_FFMPEG,
-                        'force_props': True
+                        'description': 'Zero buffer with timeout'
                     },
                     {
-                        'url': stream_url,
+                        'url': stream_url,  # Plain URL - this one worked!
                         'backend': cv2.CAP_FFMPEG,
-                        'force_props': True
-                    },
-                    {
-                        'url': stream_url.replace(':8554', ':554'),  # Standard port
-                        'backend': cv2.CAP_FFMPEG,
-                        'force_props': False
+                        'description': 'Plain RTSP URL'
                     }
                 ]
                 
-                for i, config in enumerate(rtsp_configs):
-                    print(f">> ULTRA-AGGRESSIVE RTSP attempt {i+1}: {config['url']}")
+                for i, config in enumerate(rtsp_configs, 1):
+                    print(f">> RTSP attempt {i}: {config['description']}")
                     
                     try:
                         # Create VideoCapture with specific backend
                         cap = cv2.VideoCapture(config['url'], config['backend'])
                         
-                        # Force ultra-short timeouts IMMEDIATELY
-                        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 3000)    # 3 second open
-                        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3000)    # 3 second read
-                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)              # Minimal buffer
+                        # Set optimizations immediately
+                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                         
-                        if config['force_props']:
-                            # Force resolution and FPS to speed up negotiation
-                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                            cap.set(cv2.CAP_PROP_FPS, 15)
-                            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('H', '2', '6', '4'))
-                        
-                        print(f">> Checking if VideoCapture {i+1} is opened...")
+                        print(f">> Checking if VideoCapture {i} is opened...")
                         if cap.isOpened():
-                            print(f">> VideoCapture {i+1} opened! Testing frame read with 3s timeout...")
+                            print(f">> VideoCapture {i} opened! Testing frame read...")
                             
-                            # Ultra-fast frame test with threading timeout (Windows compatible)
-                            frame_result = {'ret': False, 'frame': None, 'error': None, 'completed': False}
+                            # Quick frame test with threading timeout
+                            frame_result = {'ret': False, 'frame': None, 'completed': False}
                             
                             def read_frame():
                                 try:
@@ -166,34 +134,32 @@ def connect_camera_with_timeout(stream_url, timeout=10):
                                 
                                 if ret and frame is not None and frame.size > 0:
                                     height, width = frame.shape[:2]
-                                    print(f">> 🎉 ULTRA SUCCESS! RTSP {i+1} works (size: {width}x{height}, time: {read_time:.3f}s)")
-                                    return cap, True, f"Ultra-fast RTSP success #{i+1} in {read_time:.3f}s"
+                                    print(f">> 🎉 SUCCESS! RTSP {i} works (size: {width}x{height}, time: {read_time:.3f}s)")
+                                    return cap, True, f"RTSP success #{i} in {read_time:.3f}s"
                                 else:
-                                    print(f">> RTSP {i+1} read failed: frame_valid={frame is not None}")
+                                    print(f">> RTSP {i} read failed: frame_valid={frame is not None}")
                                     cap.release()
                             else:
-                                print(f">> RTSP {i+1} frame read timed out after 3s")
+                                print(f">> RTSP {i} frame read timed out after 3s")
                                 cap.release()
                         else:
-                            print(f">> RTSP {i+1} failed to open")
+                            print(f">> RTSP {i} failed to open")
                             cap.release()
                     
                     except Exception as config_err:
-                        print(f">> RTSP {i+1} config error: {config_err}")
+                        print(f">> RTSP {i} config error: {config_err}")
                         try:
                             cap.release()
                         except:
                             pass
                 
-                # If all ultra-aggressive attempts fail
-                print(f">> All ULTRA-AGGRESSIVE RTSP attempts failed")
-                return None, False, "All ultra-aggressive RTSP attempts failed"
+                # If all RTSP attempts fail
+                print(f">> All RTSP attempts failed")
+                return None, False, "All RTSP attempts failed"
             
             else:
                 # Standard approach for HTTP streams
                 cap = cv2.VideoCapture(stream_url)
-                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout * 1000)
-                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10000)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 
                 print(f">> Checking if VideoCapture is opened...")
@@ -511,451 +477,6 @@ def video_stream(stream_id):
         from flask import Response
         return Response(f"Error: {str(e)}", status=500)
 
-def console_test_rtsp_stream():
-    """Console-based RTSP stream testing with extensive logging"""
-    print("\n" + "="*80)
-    print("🔬 CONSOLE RTSP STREAM TEST")
-    print("="*80)
-    
-    # Get stream from database
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, name, url FROM streams WHERE active = 1')
-        streams = cursor.fetchall()
-        conn.close()
-        
-        if not streams:
-            print("❌ No active streams found in database")
-            return
-        
-        stream_id, stream_name, stream_url = streams[0]
-        print(f"📡 Testing stream: {stream_name}")
-        print(f"🔗 URL: {stream_url}")
-        print(f"📊 Stream ID: {stream_id}")
-        
-    except Exception as e:
-        print(f"❌ Database error: {e}")
-        return
-    
-    print("\n" + "-"*60)
-    print("🎯 PHASE 1: OpenCV VideoCapture Creation")
-    print("-"*60)
-    
-    # Test 1: Basic VideoCapture creation
-    try:
-        print(f"⏳ Creating cv2.VideoCapture('{stream_url}')...")
-        cap = cv2.VideoCapture(stream_url)
-        print(f"✅ VideoCapture object created successfully")
-    except Exception as e:
-        print(f"❌ Failed to create VideoCapture: {e}")
-        return
-    
-    # Test 2: Check if opened
-    print(f"⏳ Checking if VideoCapture is opened...")
-    is_opened = cap.isOpened()
-    print(f"📊 cap.isOpened() = {is_opened}")
-    
-    if not is_opened:
-        print("❌ VideoCapture failed to open. Testing different approaches...")
-        cap.release()
-        
-        # Try with different backends
-        backends_to_try = [
-            (cv2.CAP_FFMPEG, "FFMPEG"),
-            (cv2.CAP_GSTREAMER, "GStreamer"),
-            (cv2.CAP_DSHOW, "DirectShow"),
-            (cv2.CAP_ANY, "Any Available")
-        ]
-        
-        for backend, name in backends_to_try:
-            try:
-                print(f"⏳ Trying backend: {name}")
-                cap = cv2.VideoCapture(stream_url, backend)
-                if cap.isOpened():
-                    print(f"✅ Success with {name} backend!")
-                    break
-                else:
-                    print(f"❌ Failed with {name} backend")
-                    cap.release()
-            except Exception as e:
-                print(f"❌ Exception with {name} backend: {e}")
-        
-        if not cap.isOpened():
-            print("❌ All backends failed. Stream URL might be invalid.")
-            return
-    
-    print("\n" + "-"*60)
-    print("🎯 PHASE 2: VideoCapture Properties")
-    print("-"*60)
-    
-    # Get and display all relevant properties
-    properties = [
-        (cv2.CAP_PROP_FRAME_WIDTH, "Frame Width"),
-        (cv2.CAP_PROP_FRAME_HEIGHT, "Frame Height"),
-        (cv2.CAP_PROP_FPS, "FPS"),
-        (cv2.CAP_PROP_FOURCC, "FOURCC Codec"),
-        (cv2.CAP_PROP_FRAME_COUNT, "Frame Count"),
-        (cv2.CAP_PROP_BUFFERSIZE, "Buffer Size"),
-        (cv2.CAP_PROP_POS_FRAMES, "Current Frame Position"),
-    ]
-    
-    for prop_id, prop_name in properties:
-        try:
-            value = cap.get(prop_id)
-            if prop_id == cv2.CAP_PROP_FOURCC:
-                # Convert FOURCC to readable format
-                fourcc_int = int(value)
-                fourcc_str = ''.join([chr((fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
-                print(f"📊 {prop_name}: {fourcc_int} ({fourcc_str})")
-            else:
-                print(f"📊 {prop_name}: {value}")
-        except Exception as e:
-            print(f"❌ Error getting {prop_name}: {e}")
-    
-    print("\n" + "-"*60)
-    print("🎯 PHASE 3: Frame Reading Tests")
-    print("-"*60)
-    
-    # Test frame reading with detailed logging
-    frame_test_count = 10
-    successful_reads = 0
-    
-    for i in range(frame_test_count):
-        print(f"⏳ Reading frame {i+1}/{frame_test_count}...")
-        
-        start_time = time.time()
-        ret, frame = cap.read()
-        read_time = time.time() - start_time
-        
-        print(f"📊 Frame {i+1} read time: {read_time:.3f}s")
-        print(f"📊 Frame {i+1} ret value: {ret}")
-        
-        if ret and frame is not None:
-            height, width, channels = frame.shape
-            print(f"📊 Frame {i+1} shape: {width}x{height}x{channels}")
-            print(f"📊 Frame {i+1} dtype: {frame.dtype}")
-            print(f"📊 Frame {i+1} size: {frame.size} bytes")
-            print(f"✅ Frame {i+1} read successfully!")
-            successful_reads += 1
-            
-            # Save first successful frame for inspection
-            if successful_reads == 1:
-                try:
-                    test_image_path = "rtsp_test_frame.jpg"
-                    cv2.imwrite(test_image_path, frame)
-                    print(f"💾 Saved test frame to: {test_image_path}")
-                except Exception as e:
-                    print(f"❌ Failed to save test frame: {e}")
-                    
-        else:
-            print(f"❌ Frame {i+1} read failed!")
-            if frame is None:
-                print(f"📊 Frame {i+1} is None")
-            else:
-                print(f"📊 Frame {i+1} exists but ret=False")
-        
-        print(f"⏱️ Waiting 1 second before next frame...")
-        time.sleep(1)
-        print()
-    
-    print("\n" + "-"*60)
-    print("🎯 PHASE 4: Results Summary")
-    print("-"*60)
-    
-    success_rate = (successful_reads / frame_test_count) * 100
-    print(f"📊 Total frames attempted: {frame_test_count}")
-    print(f"📊 Successful frame reads: {successful_reads}")
-    print(f"📊 Success rate: {success_rate:.1f}%")
-    
-    if success_rate >= 80:
-        print("✅ RTSP stream is working well!")
-        print("🔧 Issue might be with the web interface or threading")
-    elif success_rate >= 50:
-        print("⚠️ RTSP stream is partially working")
-        print("🔧 Stream might be unstable or have intermittent issues")
-    else:
-        print("❌ RTSP stream has serious issues")
-        print("🔧 Consider checking:")
-        print("   - Network connectivity")
-        print("   - Camera settings")
-        print("   - Codec compatibility")
-        print("   - DVR configuration")
-    
-    # Test 5: Continuous reading test
-    print("\n" + "-"*60)
-    print("🎯 PHASE 5: Continuous Reading Test (10 seconds)")
-    print("-"*60)
-    
-    print("⏳ Starting continuous reading for 10 seconds...")
-    print("📺 Press Ctrl+C to stop early if needed")
-    
-    start_time = time.time()
-    continuous_frames = 0
-    continuous_errors = 0
-    
-    try:
-        while (time.time() - start_time) < 10:
-            ret, frame = cap.read()
-            if ret and frame is not None:
-                continuous_frames += 1
-                if continuous_frames % 5 == 0:  # Log every 5th frame
-                    elapsed = time.time() - start_time
-                    fps = continuous_frames / elapsed if elapsed > 0 else 0
-                    print(f"📊 {continuous_frames} frames read, {fps:.1f} FPS, {elapsed:.1f}s elapsed")
-            else:
-                continuous_errors += 1
-                if continuous_errors % 5 == 0:  # Log every 5th error
-                    print(f"❌ {continuous_errors} read errors so far")
-            
-            time.sleep(0.1)  # Small delay
-            
-    except KeyboardInterrupt:
-        print("\n⏹️ Stopped by user")
-    
-    elapsed_total = time.time() - start_time
-    final_fps = continuous_frames / elapsed_total if elapsed_total > 0 else 0
-    
-    print(f"\n📊 Continuous test results:")
-    print(f"📊 Duration: {elapsed_total:.1f}s")
-    print(f"📊 Frames read: {continuous_frames}")
-    print(f"📊 Errors: {continuous_errors}")
-    print(f"📊 Average FPS: {final_fps:.1f}")
-    print(f"📊 Error rate: {(continuous_errors/(continuous_frames+continuous_errors)*100):.1f}%")
-    
-    # Cleanup
-    cap.release()
-    print("\n🧹 VideoCapture released")
-    print("="*80)
-    print("🏁 RTSP STREAM TEST COMPLETED")
-    print("="*80)
-
-# Add route to trigger console test
-@app.route('/api/test/rtsp-console')
-def test_rtsp_console():
-    """Trigger console RTSP test"""
-    import threading
-    test_thread = threading.Thread(target=console_test_rtsp_stream, daemon=True)
-    test_thread.start()
-    return jsonify({'message': 'RTSP console test started - check terminal output'})
-
-@app.route('/api/detection/test-popup')
-def detection_test_popup():
-    """Open popup window for testing camera detection"""
-    return render_template_string("""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Face Detection Test - Live Stream</title>
-        <style>
-            body {
-                margin: 0;
-                padding: 20px;
-                background: #1a1a1a;
-                color: white;
-                font-family: Arial, sans-serif;
-                text-align: center;
-            }
-            .container {
-                max-width: 1200px;
-                margin: 0 auto;
-            }
-            .status {
-                padding: 15px;
-                margin-bottom: 20px;
-                border-radius: 8px;
-                font-weight: bold;
-            }
-            .status.connecting {
-                background: #ff9800;
-                color: white;
-            }
-            .status.connected {
-                background: #4caf50;
-                color: white;
-            }
-            .status.error {
-                background: #f44336;
-                color: white;
-            }
-            .video-container {
-                border: 2px solid #333;
-                border-radius: 8px;
-                overflow: hidden;
-                margin: 20px auto;
-                max-width: 800px;
-                background: #000;
-                min-height: 400px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }
-            .video-stream {
-                max-width: 100%;
-                height: auto;
-            }
-            .loading {
-                color: #999;
-                font-size: 18px;
-            }
-            .info {
-                background: #333;
-                padding: 15px;
-                border-radius: 8px;
-                margin-top: 20px;
-                text-align: left;
-            }
-            .close-btn {
-                position: absolute;
-                top: 10px;
-                right: 10px;
-                background: #f44336;
-                color: white;
-                border: none;
-                padding: 10px 15px;
-                border-radius: 5px;
-                cursor: pointer;
-            }
-        </style>
-    </head>
-    <body>
-        <button class="close-btn" onclick="window.close()">Close</button>
-        
-        <div class="container">
-            <h1>🎥 Face Detection Test Stream</h1>
-            
-            <div id="status" class="status connecting">
-                🔄 Initializing camera connection...
-            </div>
-            
-            <div class="video-container">
-                <img id="videoStream" class="video-stream" style="display: none;" />
-                <div id="loading" class="loading">
-                    📡 Waiting for video stream...
-                </div>
-            </div>
-            
-            <div class="info">
-                <h3>Connection Details:</h3>
-                <div id="streamInfo">
-                    <p>🔗 <strong>Stream URL:</strong> <span id="streamUrl">Loading...</span></p>
-                    <p>📊 <strong>Status:</strong> <span id="streamStatus">Initializing...</span></p>
-                    <p>⏱️ <strong>Started:</strong> <span id="startTime">{{ start_time }}</span></p>
-                </div>
-            </div>
-        </div>
-
-        <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
-        <script>
-            let socket;
-            
-            // Initialize socket connection
-            try {
-                socket = io();
-            } catch (error) {
-                console.error('Failed to initialize socket:', error);
-                document.getElementById('status').textContent = '❌ Failed to connect to server';
-                document.getElementById('status').className = 'status error';
-            }
-            
-            const statusDiv = document.getElementById('status');
-            const videoStream = document.getElementById('videoStream');
-            const loading = document.getElementById('loading');
-            const streamUrl = document.getElementById('streamUrl');
-            const streamStatus = document.getElementById('streamStatus');
-            
-            if (socket) {
-                // Listen for detection status updates
-                socket.on('detection_status', (data) => {
-                    console.log('Detection status:', data);
-                    statusDiv.textContent = data.message || data.status;
-                    streamStatus.textContent = data.status;
-                    
-                    if (data.status === 'running') {
-                        statusDiv.className = 'status connected';
-                        statusDiv.textContent = '✅ Camera connected - Starting video stream...';
-                        
-                        // Start trying to load the video stream
-                        tryLoadVideoStream();
-                    } else if (data.status === 'error') {
-                        statusDiv.className = 'status error';
-                        streamStatus.textContent = 'Error: ' + (data.message || 'Connection failed');
-                    }
-                });
-                
-                socket.on('detection_error', (data) => {
-                    console.log('Detection error:', data);
-                    statusDiv.className = 'status error';
-                    statusDiv.textContent = '❌ ' + (data.error || 'Connection failed');
-                    streamStatus.textContent = 'Error: ' + data.error;
-                });
-                
-                socket.on('connect', () => {
-                    console.log('Socket connected to server');
-                    statusDiv.textContent = '🔗 Connected to server, waiting for camera...';
-                });
-                
-                socket.on('disconnect', () => {
-                    console.log('Socket disconnected from server');
-                    statusDiv.className = 'status error';
-                    statusDiv.textContent = '🔌 Disconnected from server';
-                });
-            }
-            
-            function tryLoadVideoStream() {
-                // Try to load the detection feed for stream ID 1
-                const feedUrl = '/api/detection/feed/1?' + new Date().getTime();
-                streamUrl.textContent = feedUrl;
-                
-                console.log('Attempting to load video stream:', feedUrl);
-                
-                videoStream.onload = function() {
-                    console.log('Video stream loaded successfully');
-                    loading.style.display = 'none';
-                    videoStream.style.display = 'block';
-                    statusDiv.textContent = '🎥 Live stream active with face detection';
-                };
-                
-                videoStream.onerror = function() {
-                    console.log('Failed to load video stream, retrying in 2 seconds...');
-                    setTimeout(() => {
-                        tryLoadVideoStream();
-                    }, 2000);
-                };
-                
-                // Add a test to see if the endpoint exists
-                fetch(feedUrl, { method: 'HEAD' })
-                    .then(response => {
-                        console.log('Feed endpoint response:', response.status);
-                        if (response.ok) {
-                            videoStream.src = feedUrl;
-                        } else {
-                            console.log('Feed endpoint not ready, retrying...');
-                            setTimeout(() => {
-                                tryLoadVideoStream();
-                            }, 2000);
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error checking feed endpoint:', error);
-                        setTimeout(() => {
-                            tryLoadVideoStream();
-                        }, 2000);
-                    });
-            }
-            
-            // Auto-retry connection if it fails
-            setTimeout(() => {
-                if (streamStatus.textContent === 'Initializing...') {
-                    statusDiv.className = 'status error';
-                    statusDiv.textContent = '⚠️ Connection timeout - Check camera settings';
-                }
-            }, 60000); // 60 second timeout
-        </script>
-    </body>
-    </html>
-    """, start_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-
 @app.route('/api/camera/preview')
 def camera_preview():
     """Serve camera preview page"""
@@ -972,80 +493,216 @@ def camera_preview():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Camera Preview - {camera_name}</title>
+        <title>Camera Test - {camera_name}</title>
         <style>
             body {{
                 margin: 0;
                 padding: 20px;
-                background: #f5f5f5;
+                background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%);
+                color: white;
                 font-family: Arial, sans-serif;
+                min-height: 100vh;
             }}
             .container {{
-                max-width: 800px;
+                max-width: 900px;
                 margin: 0 auto;
                 text-align: center;
             }}
-            .video-container {{
-                border: 2px solid #ddd;
+            .header {{
+                background: rgba(30, 41, 59, 0.8);
+                padding: 20px;
                 border-radius: 8px;
-                overflow: hidden;
-                display: inline-block;
-                background: #000;
+                margin-bottom: 20px;
+                backdrop-filter: blur(10px);
             }}
-            img {{
+            .status {{
+                padding: 10px 20px;
+                border-radius: 20px;
+                font-weight: bold;
+                margin: 10px 0;
+                display: inline-block;
+            }}
+            .status.connecting {{
+                background: #ff9800;
+                color: white;
+            }}
+            .status.connected {{
+                background: #4caf50;
+                color: white;
+            }}
+            .status.error {{
+                background: #f44336;
+                color: white;
+            }}
+            .video-container {{
+                background: rgba(0, 0, 0, 0.8);
+                border: 2px solid #334155;
+                border-radius: 12px;
+                overflow: hidden;
+                margin: 20px 0;
+                min-height: 400px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                position: relative;
+            }}
+            .video-stream {{
                 max-width: 100%;
                 height: auto;
                 display: block;
             }}
+            .loading {{
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 20px;
+                color: #94a3b8;
+            }}
+            .spinner {{
+                width: 50px;
+                height: 50px;
+                border: 4px solid #334155;
+                border-top: 4px solid #3b82f6;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+            }}
+            @keyframes spin {{
+                0% {{ transform: rotate(0deg); }}
+                100% {{ transform: rotate(360deg); }}
+            }}
+            .live-indicator {{
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                background: rgba(239, 68, 68, 0.9);
+                color: white;
+                padding: 5px 10px;
+                border-radius: 12px;
+                font-size: 12px;
+                font-weight: bold;
+                letter-spacing: 1px;
+            }}
             .info {{
-                margin: 20px 0;
+                background: rgba(30, 41, 59, 0.8);
                 padding: 15px;
-                background: white;
                 border-radius: 8px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                margin: 20px 0;
+                backdrop-filter: blur(10px);
+                text-align: left;
             }}
             .close-btn {{
-                padding: 10px 20px;
-                background: #1976d2;
+                padding: 12px 24px;
+                background: linear-gradient(135deg, #ef4444, #dc2626);
                 color: white;
                 border: none;
-                border-radius: 4px;
+                border-radius: 6px;
                 cursor: pointer;
                 font-size: 16px;
+                font-weight: bold;
+                transition: all 0.3s ease;
             }}
             .close-btn:hover {{
-                background: #1565c0;
+                background: linear-gradient(135deg, #dc2626, #b91c1c);
+                transform: translateY(-1px);
             }}
-            .status {{
-                color: green;
-                font-weight: bold;
+            .url-display {{
+                background: rgba(0, 0, 0, 0.3);
+                padding: 8px 12px;
+                border-radius: 4px;
+                font-family: monospace;
+                word-break: break-all;
+                font-size: 14px;
+                color: #94a3b8;
             }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h2>{camera_name} - Live Preview</h2>
+            <div class="header">
+                <h1>📹 {camera_name}</h1>
+                <div id="status" class="status connecting">
+                    🔄 Connecting to camera...
+                </div>
+            </div>
             
             <div class="info">
-                <p><strong>URL:</strong> {camera_url}</p>
-                <p><strong>Status:</strong> <span class="status">🟢 Live Streaming</span></p>
+                <p><strong>Stream URL:</strong></p>
+                <div class="url-display">{camera_url}</div>
             </div>
             
-            <div class="video-container">
-                <img id="videoStream" src="/api/camera/stream_url?url={camera_url}" alt="Live Camera Stream">
+            <div class="video-container" id="videoContainer">
+                <div id="loading" class="loading">
+                    <div class="spinner"></div>
+                    <div>📡 Establishing connection...</div>
+                    <div style="font-size: 14px; color: #64748b;">Please wait while we connect to your camera</div>
+                </div>
+                <img id="videoStream" class="video-stream" style="display: none;" />
+                <div id="liveIndicator" class="live-indicator" style="display: none;">🔴 LIVE</div>
             </div>
             
-            <br><br>
-            <button class="close-btn" onclick="window.close()">Close Preview</button>
+            <button class="close-btn" onclick="window.close()">Close Test Window</button>
         </div>
         
         <script>
-            // Handle stream errors
-            document.getElementById('videoStream').onerror = function() {{
-                this.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQwIiBoZWlnaHQ9IjQ4MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxOCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkNhbWVyYSBTdHJlYW0gVW5hdmFpbGFibGU8L3RleHQ+PC9zdmc+';
-                document.querySelector('.status').innerHTML = '🔴 Stream Disconnected';
-                document.querySelector('.status').style.color = 'red';
-            }};
+            const statusDiv = document.getElementById('status');
+            const videoStream = document.getElementById('videoStream');
+            const loading = document.getElementById('loading');
+            const liveIndicator = document.getElementById('liveIndicator');
+            
+            let connectionTimeout;
+            let retryCount = 0;
+            const maxRetries = 3;
+            
+            function updateStatus(message, type) {{
+                statusDiv.textContent = message;
+                statusDiv.className = 'status ' + type;
+            }}
+            
+            function tryLoadStream() {{
+                const streamUrl = '/api/camera/stream_url?url={camera_url}&t=' + new Date().getTime();
+                
+                updateStatus('🔗 Loading video stream...', 'connecting');
+                
+                videoStream.onload = function() {{
+                    console.log('Video stream loaded successfully');
+                    loading.style.display = 'none';
+                    videoStream.style.display = 'block';
+                    liveIndicator.style.display = 'block';
+                    updateStatus('✅ Live stream active', 'connected');
+                    clearTimeout(connectionTimeout);
+                }};
+                
+                videoStream.onerror = function() {{
+                    console.log('Stream error, retrying...');
+                    retryCount++;
+                    if (retryCount < maxRetries) {{
+                        updateStatus(`⚠️ Connection issue, retrying... (${{retryCount}}/${{maxRetries}})`, 'connecting');
+                        setTimeout(() => {{
+                            tryLoadStream();
+                        }}, 2000);
+                    }} else {{
+                        loading.style.display = 'none';
+                        updateStatus('❌ Failed to load stream after multiple attempts', 'error');
+                        videoContainer.innerHTML = '<div style="padding: 40px; color: #f87171;"><h3>Stream Connection Failed</h3><p>Unable to connect to the camera stream.<br>Please check your camera settings.</p></div>';
+                    }}
+                }};
+                
+                videoStream.src = streamUrl;
+            }}
+            
+            // Start connection attempt
+            setTimeout(() => {{
+                tryLoadStream();
+            }}, 1000);
+            
+            // Timeout after 30 seconds
+            connectionTimeout = setTimeout(() => {{
+                if (statusDiv.className.includes('connecting')) {{
+                    updateStatus('⏱️ Connection timeout - Camera may be offline', 'error');
+                    loading.style.display = 'none';
+                    videoContainer.innerHTML = '<div style="padding: 40px; color: #f87171;"><h3>Connection Timeout</h3><p>Camera is not responding.<br>Please verify the camera is online and accessible.</p></div>';
+                }}
+            }}, 30000);
         </script>
     </body>
     </html>

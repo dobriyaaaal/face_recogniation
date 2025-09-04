@@ -242,7 +242,7 @@
                     try {
                         setTestVideo('testing'); // Show loading state
                         
-                        // First test connectivity
+                        // Test connectivity first
                         const response = await fetch('/api/camera/test', {
                             method: 'POST',
                             headers: {
@@ -254,23 +254,32 @@
                         const result = await response.json();
                         
                         if (result.success) {
-                            // Open live preview window
+                            // Open live preview window with loading indicator
                             const previewUrl = `/api/camera/preview?url=${encodeURIComponent(cameraUrl)}&name=${encodeURIComponent(cameraName || 'Camera')}`;
                             window.open(previewUrl, '_blank', 'width=900,height=700,scrollbars=yes,resizable=yes');
                             setTestVideo('success');
                         } else {
-                            // Show error in new window
+                            // Show error in popup
                             const errorWindow = window.open('', '_blank', 'width=600,height=400');
                             errorWindow.document.write(`
                                 <html>
-                                    <head><title>Camera Test Failed</title></head>
-                                    <body style="margin: 0; padding: 20px; background: #f5f5f5; font-family: Arial, sans-serif;">
-                                        <h2>Camera Test Failed</h2>
-                                        <p><strong>URL:</strong> ${cameraUrl}</p>
-                                        <p><strong>Status:</strong> <span style="color: red;">❌ Connection Failed</span></p>
-                                        <p><strong>Error:</strong> ${result.error}</p>
-                                        <br>
-                                        <button onclick="window.close()" style="padding: 10px 20px; background: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+                                    <head>
+                                        <title>Camera Test Failed</title>
+                                        <style>
+                                            body { margin: 0; padding: 20px; background: #f5f5f5; font-family: Arial, sans-serif; }
+                                            .error-container { text-align: center; }
+                                            .error-icon { font-size: 48px; color: #f44336; margin-bottom: 20px; }
+                                            .close-btn { padding: 10px 20px; background: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 20px; }
+                                        </style>
+                                    </head>
+                                    <body>
+                                        <div class="error-container">
+                                            <div class="error-icon">❌</div>
+                                            <h2>Camera Test Failed</h2>
+                                            <p><strong>URL:</strong> ${cameraUrl}</p>
+                                            <p><strong>Error:</strong> ${result.error}</p>
+                                            <button class="close-btn" onclick="window.close()">Close</button>
+                                        </div>
                                     </body>
                                 </html>
                             `);
@@ -317,26 +326,27 @@
                                     variant="outlined" 
                                     onClick={handleTest}
                                     disabled={!cameraUrl || testVideo === 'testing'}
+                                    startIcon={testVideo === 'testing' ? <CircularProgress size={20} color="inherit" /> : <span className="material-icons">videocam</span>}
                                 >
-                                    {testVideo === 'testing' ? 'Testing...' : 'Test Camera'}
+                                    {testVideo === 'testing' ? 'Connecting...' : 'Test Camera'}
                                 </Button>
                             </Box>
                             {testVideo === 'testing' && (
-                                <Box sx={{ mt: 2 }}>
+                                <Box sx={{ mt: 2, p: 2, bgcolor: 'rgba(59, 130, 246, 0.1)', borderRadius: 1 }}>
                                     <Typography variant="subtitle2" color="primary.main">
-                                        🔄 Testing camera connection...
+                                        🔄 Testing camera connection and opening preview window...
                                     </Typography>
                                 </Box>
                             )}
                             {testVideo === 'success' && (
-                                <Box sx={{ mt: 2 }}>
+                                <Box sx={{ mt: 2, p: 2, bgcolor: 'rgba(34, 197, 94, 0.1)', borderRadius: 1 }}>
                                     <Typography variant="subtitle2" color="success.main">
-                                        ✅ Camera test successful! Preview opened in new tab.
+                                        ✅ Camera test successful! Live preview opened in new window.
                                     </Typography>
                                 </Box>
                             )}
                             {testVideo === 'error' && (
-                                <Box sx={{ mt: 2 }}>
+                                <Box sx={{ mt: 2, p: 2, bgcolor: 'rgba(239, 68, 68, 0.1)', borderRadius: 1 }}>
                                     <Typography variant="subtitle2" color="error.main">
                                         ❌ Camera test failed. Check the URL and try again.
                                     </Typography>
@@ -710,13 +720,18 @@
         }
 
         // Stream Card Component
-        function StreamCard({ stream, onDelete, onTest }) {
+        function StreamCard({ stream, onDelete, onTest, testingStates }) {
             const [showControls, setShowControls] = useState(false);
+            const isTestingThisCamera = testingStates && testingStates[stream.id];
 
             const handleDelete = () => {
                 if (window.confirm(`Are you sure you want to delete camera "${stream.name}"?`)) {
                     onDelete(stream.id);
                 }
+            };
+
+            const handleTest = () => {
+                onTest(stream);
             };
 
             return (
@@ -740,11 +755,28 @@
                         <span className="material-icons" style={{ fontSize: '48px' }}>videocam</span>
                         <Typography variant="body2">Camera Stream</Typography>
                         <Typography variant="caption">{stream.name}</Typography>
+                        
+                        {isTestingThisCamera && (
+                            <Box sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <CircularProgress size={20} color="primary" />
+                                <Typography variant="caption" color="primary.main">
+                                    Testing connection...
+                                </Typography>
+                            </Box>
+                        )}
                     </Box>
                     {showControls && (
                         <Box className="stream-overlay">
-                            <IconButton size="small" onClick={() => onTest(stream)} sx={{ bgcolor: 'rgba(0,0,0,0.7)' }}>
-                                <span className="material-icons" style={{ color: 'white' }}>videocam</span>
+                            <IconButton 
+                                size="small" 
+                                onClick={handleTest} 
+                                disabled={isTestingThisCamera}
+                                sx={{ bgcolor: 'rgba(0,0,0,0.7)' }}
+                            >
+                                {isTestingThisCamera ? 
+                                    <CircularProgress size={20} color="inherit" /> :
+                                    <span className="material-icons" style={{ color: 'white' }}>videocam</span>
+                                }
                             </IconButton>
                             <IconButton size="small" onClick={handleDelete} sx={{ bgcolor: 'rgba(239,68,68,0.8)' }}>
                                 <span className="material-icons" style={{ color: 'white' }}>delete</span>
@@ -786,6 +818,7 @@
             const [addPersonLoading, setAddPersonLoading] = useState(false);
             const [editPersonLoading, setEditPersonLoading] = useState(false);
             const [deletePersonLoading, setDeletePersonLoading] = useState(null); // ID of person being deleted
+            const [existingCameraTestStates, setExistingCameraTestStates] = useState({}); // Track testing state for each camera
 
             // Load initial data
             useEffect(() => {
@@ -900,7 +933,10 @@
 
             const handleTestExistingCamera = async (stream) => {
                 try {
-                    // First test connectivity
+                    // Set testing state for this camera
+                    setExistingCameraTestStates(prev => ({ ...prev, [stream.id]: true }));
+                    
+                    // Test connectivity first
                     const response = await fetch('/api/camera/test', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -914,19 +950,28 @@
                         const previewUrl = `/api/camera/preview?url=${encodeURIComponent(stream.url)}&name=${encodeURIComponent(stream.name)}`;
                         window.open(previewUrl, '_blank', 'width=900,height=700,scrollbars=yes,resizable=yes');
                     } else {
-                        // Show error in new window
+                        // Show error in popup
                         const errorWindow = window.open('', '_blank', 'width=600,height=400');
                         errorWindow.document.write(`
                             <html>
-                                <head><title>Camera Test Failed</title></head>
-                                <body style="margin: 0; padding: 20px; background: #f5f5f5; font-family: Arial, sans-serif;">
-                                    <h2>Camera Test Failed</h2>
-                                    <p><strong>Camera:</strong> ${stream.name}</p>
-                                    <p><strong>URL:</strong> ${stream.url}</p>
-                                    <p><strong>Status:</strong> <span style="color: red;">❌ Connection Failed</span></p>
-                                    <p><strong>Error:</strong> ${result.error}</p>
-                                    <br>
-                                    <button onclick="window.close()" style="padding: 10px 20px; background: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+                                <head>
+                                    <title>Camera Test Failed</title>
+                                    <style>
+                                        body { margin: 0; padding: 20px; background: #f5f5f5; font-family: Arial, sans-serif; }
+                                        .error-container { text-align: center; }
+                                        .error-icon { font-size: 48px; color: #f44336; margin-bottom: 20px; }
+                                        .close-btn { padding: 10px 20px; background: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 20px; }
+                                    </style>
+                                </head>
+                                <body>
+                                    <div class="error-container">
+                                        <div class="error-icon">❌</div>
+                                        <h2>Camera Test Failed</h2>
+                                        <p><strong>Camera:</strong> ${stream.name}</p>
+                                        <p><strong>URL:</strong> ${stream.url}</p>
+                                        <p><strong>Error:</strong> ${result.error}</p>
+                                        <button class="close-btn" onclick="window.close()">Close</button>
+                                    </div>
                                 </body>
                             </html>
                         `);
@@ -934,6 +979,9 @@
                 } catch (error) {
                     console.error('Failed to test camera:', error);
                     alert('Failed to test camera: ' + error.message);
+                } finally {
+                    // Clear testing state for this camera
+                    setExistingCameraTestStates(prev => ({ ...prev, [stream.id]: false }));
                 }
             };
 
@@ -1044,20 +1092,6 @@
                     setDetectionStatus('starting');
                     setDetectionMessage('Initializing detection system...');
                     
-                    // Open popup window for testing
-                    const popupWindow = window.open(
-                        '/api/detection/test-popup',
-                        'detectionTest',
-                        'width=1000,height=800,scrollbars=yes,resizable=yes,menubar=no,toolbar=no'
-                    );
-                    
-                    if (!popupWindow) {
-                        setAlerts([...alerts, { type: 'error', message: 'Popup blocked! Please allow popups and try again.' }]);
-                        setDetectionStatus('idle');
-                        setDetectionMessage('');
-                        return;
-                    }
-                    
                     const response = await fetch('/api/detection/start', {
                         method: 'POST'
                     });
@@ -1065,36 +1099,18 @@
                     const result = await response.json();
                     
                     if (response.ok) {
-                        setAlerts([...alerts, { type: 'success', message: 'Detection test window opened! Check the popup for live stream.' }]);
+                        setAlerts([...alerts, { type: 'success', message: 'Detection started successfully!' }]);
                         // Start polling for status updates as backup
                         startStatusPolling();
                     } else {
                         setDetectionStatus('idle');
                         setDetectionMessage('');
                         setAlerts([...alerts, { type: 'error', message: result.error || 'Failed to start detection' }]);
-                        if (popupWindow) popupWindow.close();
                     }
                 } catch (error) {
                     setDetectionStatus('idle');
                     setDetectionMessage('');
                     setAlerts([...alerts, { type: 'error', message: 'Failed to start detection' }]);
-                }
-            };
-
-            const testRtspConsole = async () => {
-                try {
-                    setAlerts([...alerts, { type: 'info', message: 'Starting RTSP console test - check terminal output for detailed logs' }]);
-                    
-                    const response = await fetch('/api/test/rtsp-console');
-                    const result = await response.json();
-                    
-                    if (response.ok) {
-                        setAlerts([...alerts, { type: 'success', message: result.message }]);
-                    } else {
-                        setAlerts([...alerts, { type: 'error', message: 'Failed to start console test' }]);
-                    }
-                } catch (error) {
-                    setAlerts([...alerts, { type: 'error', message: 'Failed to start console test' }]);
                 }
             };
 
@@ -1263,15 +1279,6 @@
                                                 </Button>
                                             )
                                         )}
-                                        <Button
-                                            variant="outlined"
-                                            color="info"
-                                            startIcon={<span className="material-icons">bug_report</span>}
-                                            onClick={testRtspConsole}
-                                            sx={{ ml: 1 }}
-                                        >
-                                            Test RTSP Console
-                                        </Button>
                                     </Box>
                                 </Box>
 
@@ -1364,6 +1371,7 @@
                                                 stream={stream}
                                                 onDelete={handleDeleteCamera}
                                                 onTest={handleTestExistingCamera}
+                                                testingStates={existingCameraTestStates}
                                             />
                                         </Grid>
                                     ))}
