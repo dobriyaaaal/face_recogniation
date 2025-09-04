@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Recognition System</title>
+    
+    <!-- Material-UI CSS -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    
+    <!-- Material-UI Components -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@mui/material@5.15.0/umd/material-ui.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            overflow-x: hidden;
+        }
+
+        .dashboard-root {
+            min-height: 100vh;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%);
+        }
+
+        .MuiPaper-root {
+            background: rgba(30, 41, 59, 0.8) !important;
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(148, 163, 184, 0.1) !important;
+        }
+
+        .MuiAppBar-root {
+            background: linear-gradient(135deg, #1e293b 0%, #334155 100%) !important;
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(148, 163, 184, 0.1) !important;
+        }
+
+        .MuiTab-root {
+            color: #94a3b8 !important;
+            text-transform: none !important;
+            font-weight: 500 !important;
+        }
+
+        .MuiTab-root.Mui-selected {
+            color: #3b82f6 !important;
+        }
+
+        .MuiTabs-indicator {
+            background-color: #3b82f6 !important;
+        }
+
+        .MuiButton-contained {
+            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%) !important;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3) !important;
+        }
+
+        .MuiButton-contained:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(59, 130, 246, 0.4) !important;
+        }
+
+        .MuiButton-outlined {
+            border-color: #475569 !important;
+            color: #f8fafc !important;
+        }
+
+        .MuiTextField-root .MuiInputBase-root {
+            color: #f8fafc !important;
+        }
+
+        .MuiTextField-root .MuiInputLabel-root {
+            color: #94a3b8 !important;
+        }
+
+        .MuiTextField-root .MuiOutlinedInput-notchedOutline {
+            border-color: #475569 !important;
+        }
+
+        .MuiTextField-root .MuiOutlinedInput-root:hover .MuiOutlinedInput-notchedOutline {
+            border-color: #64748b !important;
+        }
+
+        .MuiTextField-root .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline {
+            border-color: #3b82f6 !important;
+        }
+
+        .MuiTextField-root .MuiInputLabel-root.Mui-focused {
+            color: #3b82f6 !important;
+        }
+
+        .stream-card {
+            position: relative;
+            border-radius: 12px;
+            overflow: hidden;
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .stream-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+        }
+
+        .stream-video {
+            width: 100%;
+            height: 240px;
+            object-fit: cover;
+            background: #1e293b;
+        }
+
+        .stream-overlay {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            display: flex;
+            gap: 4px;
+        }
+
+        .warning-box {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
+            padding: 16px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .add-camera-card {
+            border: 2px dashed #475569;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 240px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: rgba(30, 41, 59, 0.3);
+        }
+
+        .add-camera-card:hover {
+            border-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .person-grid-item {
+            transition: transform 0.3s ease;
+        }
+
+        .person-grid-item:hover {
+            transform: scale(1.02);
+        }
+
+        .detection-item {
+            background: rgba(30, 41, 59, 0.6);
+            border-radius: 8px;
+            margin-bottom: 8px;
+            transition: background 0.3s ease;
+        }
+
+        .detection-item:hover {
+            background: rgba(30, 41, 59, 0.8);
+        }
+    </style>
+</head>
+
+<body>
+    <div id="dashboard-root"></div>
+
+    {% raw %}
+    <script type="text/babel">
+        const { 
+            AppBar, Toolbar, Typography, Tabs, Tab, Box, Container, Grid, Paper, 
+            Button, TextField, Dialog, DialogTitle, DialogContent, DialogActions,
+            Card, CardContent, Avatar, Chip, Snackbar, Alert, Badge, IconButton,
+            List, ListItem, ListItemText, ListItemAvatar, Divider, CircularProgress,
+            createTheme, ThemeProvider, styled, FormControl, InputLabel, Select,
+            MenuItem, CardMedia, CardActions, Fab, Tooltip, Stack
+        } = window['MaterialUI'];
+
+        const { useState, useEffect, useRef } = React;
+
+        // Initialize socket connection
+        const socket = io();
+
+        const darkTheme = createTheme({
+            palette: {
+                mode: 'dark',
+                primary: {
+                    main: '#3b82f6',
+                },
+                background: {
+                    default: '#0f172a',
+                    paper: 'rgba(30, 41, 59, 0.8)',
+                },
+                text: {
+                    primary: '#f8fafc',
+                    secondary: '#94a3b8',
+                }
+            },
+        });
+
+        function TabPanel({ children, value, index, ...other }) {
+            return (
+                <div
+                    role="tabpanel"
+                    hidden={value !== index}
+                    id={`simple-tabpanel-${index}`}
+                    {...other}
+                >
+                    {value === index && (
+                        <Box sx={{ p: 3 }}>
+                            {children}
+                        </Box>
+                    )}
+                </div>
+            );
+        }
+
+        // Add Camera Dialog Component
+        function AddCameraDialog({ open, onClose, onAdd }) {
+            const [cameraName, setCameraName] = useState('');
+            const [cameraUrl, setCameraUrl] = useState('');
+            const [testVideo, setTestVideo] = useState(null);
+            const videoRef = useRef(null);
+
+            const handleTest = async () => {
+                if (cameraUrl) {
+                    try {
+                        setTestVideo('testing'); // Show loading state
+                        
+                        const response = await fetch('/api/camera/test', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({ url: cameraUrl })
+                        });
+                        
+                        const result = await response.json();
+                        
+                        if (result.success) {
+                            // Show preview in a new window with the base64 image
+                            const previewWindow = window.open('', '_blank', 'width=800,height=600');
+                            previewWindow.document.write(`
+                                <html>
+                                    <head><title>Camera Test - ${cameraName || cameraUrl}</title></head>
+                                    <body style="margin: 0; padding: 20px; background: #f5f5f5; font-family: Arial, sans-serif;">
+                                        <h2>Camera Test Result</h2>
+                                        <p><strong>URL:</strong> ${cameraUrl}</p>
+                                        <p><strong>Status:</strong> <span style="color: green;">✅ Connected Successfully</span></p>
+                                        <div style="border: 2px solid #ddd; border-radius: 8px; overflow: hidden; display: inline-block;">
+                                            <img src="${result.preview}" alt="Camera Preview" style="max-width: 100%; height: auto;">
+                                        </div>
+                                        <br><br>
+                                        <button onclick="window.close()" style="padding: 10px 20px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+                                    </body>
+                                </html>
+                            `);
+                            setTestVideo('success');
+                        } else {
+                            // Show error in new window
+                            const errorWindow = window.open('', '_blank', 'width=600,height=400');
+                            errorWindow.document.write(`
+                                <html>
+                                    <head><title>Camera Test Failed</title></head>
+                                    <body style="margin: 0; padding: 20px; background: #f5f5f5; font-family: Arial, sans-serif;">
+                                        <h2>Camera Test Failed</h2>
+                                        <p><strong>URL:</strong> ${cameraUrl}</p>
+                                        <p><strong>Status:</strong> <span style="color: red;">❌ Connection Failed</span></p>
+                                        <p><strong>Error:</strong> ${result.error}</p>
+                                        <br>
+                                        <button onclick="window.close()" style="padding: 10px 20px; background: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+                                    </body>
+                                </html>
+                            `);
+                            setTestVideo('error');
+                        }
+                    } catch (error) {
+                        console.error('Failed to test camera:', error);
+                        setTestVideo('error');
+                        alert('Failed to test camera: ' + error.message);
+                    }
+                }
+            };
+
+            const handleAdd = () => {
+                if (cameraName && cameraUrl) {
+                    onAdd(cameraName, cameraUrl);
+                    setCameraName('');
+                    setCameraUrl('');
+                    setTestVideo(null);
+                    onClose();
+                }
+            };
+
+            return (
+                <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+                    <DialogTitle>Add Camera Stream</DialogTitle>
+                    <DialogContent>
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+                            <TextField
+                                label="Camera Name"
+                                value={cameraName}
+                                onChange={(e) => setCameraName(e.target.value)}
+                                fullWidth
+                            />
+                            <TextField
+                                label="Camera URL (RTSP/HTTP)"
+                                value={cameraUrl}
+                                onChange={(e) => setCameraUrl(e.target.value)}
+                                fullWidth
+                                placeholder="rtsp://username:password@ip:port/stream or http://ip:port/video"
+                            />
+                            <Box sx={{ display: 'flex', gap: 1 }}>
+                                <Button 
+                                    variant="outlined" 
+                                    onClick={handleTest}
+                                    disabled={!cameraUrl || testVideo === 'testing'}
+                                >
+                                    {testVideo === 'testing' ? 'Testing...' : 'Test Camera'}
+                                </Button>
+                            </Box>
+                            {testVideo === 'testing' && (
+                                <Box sx={{ mt: 2 }}>
+                                    <Typography variant="subtitle2" color="primary.main">
+                                        🔄 Testing camera connection...
+                                    </Typography>
+                                </Box>
+                            )}
+                            {testVideo === 'success' && (
+                                <Box sx={{ mt: 2 }}>
+                                    <Typography variant="subtitle2" color="success.main">
+                                        ✅ Camera test successful! Preview opened in new tab.
+                                    </Typography>
+                                </Box>
+                            )}
+                            {testVideo === 'error' && (
+                                <Box sx={{ mt: 2 }}>
+                                    <Typography variant="subtitle2" color="error.main">
+                                        ❌ Camera test failed. Check the URL and try again.
+                                    </Typography>
+                                </Box>
+                            )}
+                        </Box>
+                    </DialogContent>
+                    <DialogActions>
+                        <Button onClick={onClose}>Cancel</Button>
+                        <Button onClick={handleAdd} variant="contained" disabled={!cameraName || !cameraUrl}>
+                            Add Camera
+                        </Button>
+                    </DialogActions>
+                </Dialog>
+            );
+        }
+
+        // Add Person Dialog Component
+        function AddPersonDialog({ open, onClose, onAdd }) {
+            const [personName, setPersonName] = useState('');
+            const [personImages, setPersonImages] = useState([]);
+            const [customFields, setCustomFields] = useState([{ key: '', value: '' }]);
+
+            const handleImageUpload = (event) => {
+                const files = Array.from(event.target.files);
+                setPersonImages(files);
+            };
+
+            const addCustomField = () => {
+                setCustomFields([...customFields, { key: '', value: '' }]);
+            };
+
+            const updateCustomField = (index, field, value) => {
+                const updated = [...customFields];
+                updated[index][field] = value;
+                setCustomFields(updated);
+            };
+
+            const removeCustomField = (index) => {
+                const updated = customFields.filter((_, i) => i !== index);
+                setCustomFields(updated);
+            };
+
+            const handleAdd = () => {
+                if (personName && personImages.length > 0) {
+                    const customData = customFields.filter(f => f.key && f.value);
+                    onAdd(personName, personImages, customData);
+                    setPersonName('');
+                    setPersonImages([]);
+                    setCustomFields([{ key: '', value: '' }]);
+                    onClose();
+                }
+            };
+
+            return (
+                <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+                    <DialogTitle>Add Person</DialogTitle>
+                    <DialogContent>
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+                            <TextField
+                                label="Person Name"
+                                value={personName}
+                                onChange={(e) => setPersonName(e.target.value)}
+                                fullWidth
+                                required
+                            />
+                            
+                            <Box>
+                                <Typography variant="subtitle2" sx={{ mb: 1 }}>Upload Photos</Typography>
+                                <input
+                                    type="file"
+                                    multiple
+                                    accept="image/*"
+                                    onChange={handleImageUpload}
+                                    style={{ width: '100%', padding: '8px' }}
+                                />
+                                {personImages.length > 0 && (
+                                    <Typography variant="caption" color="success.main">
+                                        {personImages.length} image(s) selected
+                                    </Typography>
+                                )}
+                            </Box>
+
+                            <Box>
+                                <Typography variant="subtitle2" sx={{ mb: 1 }}>Custom Fields</Typography>
+                                {customFields.map((field, index) => (
+                                    <Box key={index} sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
+                                        <TextField
+                                            size="small"
+                                            placeholder="Field name"
+                                            value={field.key}
+                                            onChange={(e) => updateCustomField(index, 'key', e.target.value)}
+                                        />
+                                        <TextField
+                                            size="small"
+                                            placeholder="Field value"
+                                            value={field.value}
+                                            onChange={(e) => updateCustomField(index, 'value', e.target.value)}
+                                        />
+                                        <IconButton 
+                                            size="small" 
+                                            onClick={() => removeCustomField(index)}
+                                            disabled={customFields.length === 1}
+                                        >
+                                            <span className="material-icons">delete</span>
+                                        </IconButton>
+                                    </Box>
+                                ))}
+                                <Button size="small" onClick={addCustomField} startIcon={<span className="material-icons">add</span>}>
+                                    Add Field
+                                </Button>
+                            </Box>
+                        </Box>
+                    </DialogContent>
+                    <DialogActions>
+                        <Button onClick={onClose}>Cancel</Button>
+                        <Button onClick={handleAdd} variant="contained" disabled={!personName || personImages.length === 0}>
+                            Add Person
+                        </Button>
+                    </DialogActions>
+                </Dialog>
+            );
+        }
+
+        // Stream Card Component
+        function StreamCard({ stream, onDelete, onTest }) {
+            const [showControls, setShowControls] = useState(false);
+
+            const handleDelete = () => {
+                if (window.confirm(`Are you sure you want to delete camera "${stream.name}"?`)) {
+                    onDelete(stream.id);
+                }
+            };
+
+            return (
+                <Card 
+                    className="stream-card"
+                    onMouseEnter={() => setShowControls(true)}
+                    onMouseLeave={() => setShowControls(false)}
+                >
+                    <Box 
+                        className="stream-video"
+                        sx={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            justifyContent: 'center',
+                            background: 'linear-gradient(135deg, #1e293b 0%, #334155 100%)',
+                            color: '#94a3b8',
+                            flexDirection: 'column',
+                            gap: 1
+                        }}
+                    >
+                        <span className="material-icons" style={{ fontSize: '48px' }}>videocam</span>
+                        <Typography variant="body2">Camera Stream</Typography>
+                        <Typography variant="caption">{stream.name}</Typography>
+                    </Box>
+                    {showControls && (
+                        <Box className="stream-overlay">
+                            <IconButton size="small" onClick={() => onTest(stream)} sx={{ bgcolor: 'rgba(0,0,0,0.7)' }}>
+                                <span className="material-icons" style={{ color: 'white' }}>videocam</span>
+                            </IconButton>
+                            <IconButton size="small" onClick={handleDelete} sx={{ bgcolor: 'rgba(239,68,68,0.8)' }}>
+                                <span className="material-icons" style={{ color: 'white' }}>delete</span>
+                            </IconButton>
+                        </Box>
+                    )}
+                    <CardContent>
+                        <Typography variant="h6" component="h3" noWrap>
+                            {stream.name}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary" noWrap>
+                            {stream.url.length > 50 ? stream.url.substring(0, 50) + '...' : stream.url}
+                        </Typography>
+                    </CardContent>
+                </Card>
+            );
+        }
+
+        function Dashboard() {
+            const [tabValue, setTabValue] = useState(0);
+            const [people, setPeople] = useState([]);
+            const [streams, setStreams] = useState([]);
+            const [detections, setDetections] = useState([]);
+            const [detectionStatus, setDetectionStatus] = useState('idle');
+            const [alerts, setAlerts] = useState([]);
+            
+            // Dialog states
+            const [addCameraDialog, setAddCameraDialog] = useState(false);
+            const [addPersonDialog, setAddPersonDialog] = useState(false);
+            const [galleryDialog, setGalleryDialog] = useState(false);
+            const [selectedPerson, setSelectedPerson] = useState(null);
+            const [selectedDate, setSelectedDate] = useState(null);
+
+            // Load initial data
+            useEffect(() => {
+                loadPeople();
+                loadStreams();
+                loadDetections();
+            }, []);
+
+            const loadPeople = async () => {
+                try {
+                    const response = await fetch('/api/people');
+                    if (response.ok) {
+                        const data = await response.json();
+                        setPeople(data.people || []);
+                    }
+                } catch (error) {
+                    console.error('Failed to load people:', error);
+                }
+            };
+
+            const loadStreams = async () => {
+                try {
+                    const response = await fetch('/api/streams');
+                    if (response.ok) {
+                        const data = await response.json();
+                        setStreams(data.streams || []);
+                    }
+                } catch (error) {
+                    console.error('Failed to load streams:', error);
+                }
+            };
+
+            const loadDetections = async () => {
+                try {
+                    const response = await fetch('/api/detections');
+                    if (response.ok) {
+                        const data = await response.json();
+                        setDetections(data.detections || []);
+                    }
+                } catch (error) {
+                    console.error('Failed to load detections:', error);
+                }
+            };
+
+            const handleAddCamera = async (name, url) => {
+                try {
+                    const response = await fetch('/api/streams', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name, url })
+                    });
+                    
+                    if (response.ok) {
+                        setAlerts([...alerts, { type: 'success', message: `Camera "${name}" added successfully!` }]);
+                        loadStreams();
+                    } else {
+                        const error = await response.json();
+                        setAlerts([...alerts, { type: 'error', message: error.error || 'Failed to add camera' }]);
+                    }
+                } catch (error) {
+                    setAlerts([...alerts, { type: 'error', message: 'Failed to add camera' }]);
+                }
+            };
+
+            const handleDeleteCamera = async (streamId) => {
+                try {
+                    const response = await fetch(`/api/streams/${streamId}`, {
+                        method: 'DELETE'
+                    });
+                    
+                    if (response.ok) {
+                        setAlerts([...alerts, { type: 'success', message: 'Camera deleted successfully!' }]);
+                        loadStreams();
+                    }
+                } catch (error) {
+                    setAlerts([...alerts, { type: 'error', message: 'Failed to delete camera' }]);
+                }
+            };
+
+            const handleTestExistingCamera = async (stream) => {
+                try {
+                    const response = await fetch('/api/camera/test', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: stream.url })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        // Show preview in a new window with the base64 image
+                        const previewWindow = window.open('', '_blank', 'width=800,height=600');
+                        previewWindow.document.write(`
+                            <html>
+                                <head><title>Camera Preview - ${stream.name}</title></head>
+                                <body style="margin: 0; padding: 20px; background: #f5f5f5; font-family: Arial, sans-serif;">
+                                    <h2>${stream.name} - Live Preview</h2>
+                                    <p><strong>URL:</strong> ${stream.url}</p>
+                                    <p><strong>Status:</strong> <span style="color: green;">✅ Connected Successfully</span></p>
+                                    <div style="border: 2px solid #ddd; border-radius: 8px; overflow: hidden; display: inline-block;">
+                                        <img src="${result.preview}" alt="Camera Preview" style="max-width: 100%; height: auto;">
+                                    </div>
+                                    <br><br>
+                                    <button onclick="window.close()" style="padding: 10px 20px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+                                </body>
+                            </html>
+                        `);
+                    } else {
+                        // Show error in new window
+                        const errorWindow = window.open('', '_blank', 'width=600,height=400');
+                        errorWindow.document.write(`
+                            <html>
+                                <head><title>Camera Test Failed</title></head>
+                                <body style="margin: 0; padding: 20px; background: #f5f5f5; font-family: Arial, sans-serif;">
+                                    <h2>Camera Test Failed</h2>
+                                    <p><strong>Camera:</strong> ${stream.name}</p>
+                                    <p><strong>URL:</strong> ${stream.url}</p>
+                                    <p><strong>Status:</strong> <span style="color: red;">❌ Connection Failed</span></p>
+                                    <p><strong>Error:</strong> ${result.error}</p>
+                                    <br>
+                                    <button onclick="window.close()" style="padding: 10px 20px; background: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+                                </body>
+                            </html>
+                        `);
+                    }
+                } catch (error) {
+                    console.error('Failed to test camera:', error);
+                    alert('Failed to test camera: ' + error.message);
+                }
+            };
+
+            const handleAddPerson = async (name, images, customFields) => {
+                try {
+                    const formData = new FormData();
+                    formData.append('name', name);
+                    
+                    images.forEach((image, index) => {
+                        formData.append(`image_${index}`, image);
+                    });
+                    
+                    customFields.forEach((field, index) => {
+                        formData.append(`custom_${index}_key`, field.key);
+                        formData.append(`custom_${index}_value`, field.value);
+                    });
+
+                    const response = await fetch('/api/people/add', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    if (response.ok) {
+                        setAlerts([...alerts, { type: 'success', message: `Person "${name}" added successfully!` }]);
+                        loadPeople();
+                    } else {
+                        const error = await response.json();
+                        setAlerts([...alerts, { type: 'error', message: error.error || 'Failed to add person' }]);
+                    }
+                } catch (error) {
+                    setAlerts([...alerts, { type: 'error', message: 'Failed to add person' }]);
+                }
+            };
+
+            const startDetection = async () => {
+                try {
+                    const response = await fetch('/api/detection/start', {
+                        method: 'POST'
+                    });
+                    
+                    if (response.ok) {
+                        setDetectionStatus('running');
+                        setAlerts([...alerts, { type: 'success', message: 'Detection started!' }]);
+                    }
+                } catch (error) {
+                    setAlerts([...alerts, { type: 'error', message: 'Failed to start detection' }]);
+                }
+            };
+
+            const stopDetection = async () => {
+                try {
+                    const response = await fetch('/api/detection/stop', {
+                        method: 'POST'
+                    });
+                    
+                    if (response.ok) {
+                        setDetectionStatus('idle');
+                        setAlerts([...alerts, { type: 'success', message: 'Detection stopped!' }]);
+                    }
+                } catch (error) {
+                    setAlerts([...alerts, { type: 'error', message: 'Failed to stop detection' }]);
+                }
+            };
+
+            // Check if ready to start detection
+            const canStartDetection = people.length > 0 && streams.length > 0;
+
+            return (
+                <ThemeProvider theme={darkTheme}>
+                    <Box className="dashboard-root">
+                        <AppBar position="static" elevation={0}>
+                            <Toolbar>
+                                <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+                                    Face Recognition System
+                                </Typography>
+                                <Chip 
+                                    label={detectionStatus === 'running' ? 'Detection Active' : 'Detection Idle'}
+                                    color={detectionStatus === 'running' ? 'success' : 'default'}
+                                    variant="outlined"
+                                />
+                            </Toolbar>
+                        </AppBar>
+
+                        <Container maxWidth="xl" sx={{ mt: 2 }}>
+                            <Paper sx={{ width: '100%', mb: 2 }}>
+                                <Tabs 
+                                    value={tabValue} 
+                                    onChange={(e, newValue) => setTabValue(newValue)}
+                                    aria-label="dashboard tabs"
+                                    variant="fullWidth"
+                                >
+                                    <Tab label="Detection & Streams" />
+                                    <Tab label="Add People" />
+                                    <Tab label="Gallery" />
+                                </Tabs>
+                            </Paper>
+
+                            {/* Tab 1: Detection & Streams */}
+                            <TabPanel value={tabValue} index={0}>
+                                {!canStartDetection && (
+                                    <Box className="warning-box" sx={{ mb: 3 }}>
+                                        <Typography variant="h6" sx={{ mb: 1 }}>
+                                            <span className="material-icons" style={{ verticalAlign: 'middle', mr: 1 }}>warning</span>
+                                            Setup Required
+                                        </Typography>
+                                        <Typography>
+                                            {people.length === 0 && 'Please add at least one person. '}
+                                            {streams.length === 0 && 'Please add at least one camera stream.'}
+                                        </Typography>
+                                    </Box>
+                                )}
+
+                                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+                                    <Typography variant="h5">Camera Streams</Typography>
+                                    <Box sx={{ display: 'flex', gap: 2 }}>
+                                        <Button
+                                            variant="contained"
+                                            startIcon={<span className="material-icons">add</span>}
+                                            onClick={() => setAddCameraDialog(true)}
+                                        >
+                                            Add Camera
+                                        </Button>
+                                        {canStartDetection && (
+                                            detectionStatus === 'idle' ? (
+                                                <Button
+                                                    variant="contained"
+                                                    color="success"
+                                                    startIcon={<span className="material-icons">play_arrow</span>}
+                                                    onClick={startDetection}
+                                                >
+                                                    Start Detection
+                                                </Button>
+                                            ) : (
+                                                <Button
+                                                    variant="contained"
+                                                    color="error"
+                                                    startIcon={<span className="material-icons">stop</span>}
+                                                    onClick={stopDetection}
+                                                >
+                                                    Stop Detection
+                                                </Button>
+                                            )
+                                        )}
+                                    </Box>
+                                </Box>
+
+                                <Grid container spacing={3}>
+                                    {streams.map((stream) => (
+                                        <Grid item xs={12} sm={6} md={4} key={stream.id}>
+                                            <StreamCard 
+                                                stream={stream}
+                                                onDelete={handleDeleteCamera}
+                                                onTest={handleTestExistingCamera}
+                                            />
+                                        </Grid>
+                                    ))}
+                                    
+                                    <Grid item xs={12} sm={6} md={4}>
+                                        <Card 
+                                            className="add-camera-card"
+                                            onClick={() => setAddCameraDialog(true)}
+                                        >
+                                            <Box sx={{ textAlign: 'center' }}>
+                                                <span className="material-icons" style={{ fontSize: '48px', color: '#475569', mb: 1 }}>add_circle</span>
+                                                <Typography variant="h6" color="text.secondary">
+                                                    Add Camera
+                                                </Typography>
+                                            </Box>
+                                        </Card>
+                                    </Grid>
+                                </Grid>
+                            </TabPanel>
+
+                            {/* Tab 2: Add People */}
+                            <TabPanel value={tabValue} index={1}>
+                                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+                                    <Typography variant="h5">Manage People</Typography>
+                                    <Button
+                                        variant="contained"
+                                        startIcon={<span className="material-icons">person_add</span>}
+                                        onClick={() => setAddPersonDialog(true)}
+                                    >
+                                        Add Person
+                                    </Button>
+                                </Box>
+
+                                <Grid container spacing={3}>
+                                    {people.map((person) => (
+                                        <Grid item xs={12} sm={6} md={3} key={person.id} className="person-grid-item">
+                                            <Card>
+                                                <CardMedia
+                                                    component="img"
+                                                    height="200"
+                                                    image={`/api/people/${person.id}/image`}
+                                                    alt={person.name}
+                                                    sx={{ objectFit: 'cover' }}
+                                                />
+                                                <CardContent>
+                                                    <Typography variant="h6" component="h3" noWrap>
+                                                        {person.name}
+                                                    </Typography>
+                                                    <Typography variant="body2" color="text.secondary">
+                                                        {person.image_count} image(s)
+                                                    </Typography>
+                                                    {person.custom_fields && Object.keys(person.custom_fields).map(key => (
+                                                        <Chip 
+                                                            key={key}
+                                                            label={`${key}: ${person.custom_fields[key]}`}
+                                                            size="small"
+                                                            sx={{ mt: 1, mr: 1 }}
+                                                        />
+                                                    ))}
+                                                </CardContent>
+                                            </Card>
+                                        </Grid>
+                                    ))}
+                                    
+                                    <Grid item xs={12} sm={6} md={3}>
+                                        <Card 
+                                            className="add-camera-card"
+                                            onClick={() => setAddPersonDialog(true)}
+                                            sx={{ height: '320px' }}
+                                        >
+                                            <Box sx={{ textAlign: 'center' }}>
+                                                <span className="material-icons" style={{ fontSize: '48px', color: '#475569', mb: 1 }}>person_add</span>
+                                                <Typography variant="h6" color="text.secondary">
+                                                    Add Person
+                                                </Typography>
+                                            </Box>
+                                        </Card>
+                                    </Grid>
+                                </Grid>
+                            </TabPanel>
+
+                            {/* Tab 3: Gallery */}
+                            <TabPanel value={tabValue} index={2}>
+                                <Typography variant="h5" sx={{ mb: 3 }}>Detection Gallery</Typography>
+                                
+                                <Grid container spacing={3}>
+                                    {people.map((person) => (
+                                        <Grid item xs={12} sm={6} md={3} key={person.id}>
+                                            <Card 
+                                                sx={{ cursor: 'pointer' }}
+                                                onClick={() => {
+                                                    setSelectedPerson(person);
+                                                    setGalleryDialog(true);
+                                                }}
+                                            >
+                                                <CardMedia
+                                                    component="img"
+                                                    height="200"
+                                                    image={`/api/people/${person.id}/image`}
+                                                    alt={person.name}
+                                                />
+                                                <CardContent>
+                                                    <Typography variant="h6" component="h3">
+                                                        {person.name}
+                                                    </Typography>
+                                                    <Typography variant="body2" color="text.secondary">
+                                                        Click to view detections
+                                                    </Typography>
+                                                </CardContent>
+                                            </Card>
+                                        </Grid>
+                                    ))}
+                                </Grid>
+                            </TabPanel>
+                        </Container>
+
+                        {/* Dialogs */}
+                        <AddCameraDialog 
+                            open={addCameraDialog}
+                            onClose={() => setAddCameraDialog(false)}
+                            onAdd={handleAddCamera}
+                        />
+
+                        <AddPersonDialog 
+                            open={addPersonDialog}
+                            onClose={() => setAddPersonDialog(false)}
+                            onAdd={handleAddPerson}
+                        />
+
+                        {/* Snackbar for alerts */}
+                        {alerts.map((alert, index) => (
+                            <Snackbar
+                                key={index}
+                                open={true}
+                                autoHideDuration={6000}
+                                onClose={() => setAlerts(alerts.filter((_, i) => i !== index))}
+                            >
+                                <Alert severity={alert.type}>
+                                    {alert.message}
+                                </Alert>
+                            </Snackbar>
+                        ))}
+                    </Box>
+                </ThemeProvider>
+            );
+        }
+
+        ReactDOM.render(<Dashboard />, document.getElementById('dashboard-root'));
+    </script>
+    {% endraw %}
+</body>
+</html>
