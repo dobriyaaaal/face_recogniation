@@ -41,6 +41,27 @@ app = Flask(__name__,
             static_folder='static')
 app.config['SECRET_KEY'] = 'simple_face_recognition_key'
 
+# Import enhanced camera management
+try:
+    from camera_api import camera_bp
+    from camera_manager import camera_manager, hardware_optimizer
+    USE_ENHANCED_FEATURES = True
+    print(">> Enhanced camera features loaded")
+    # Register enhanced camera blueprint
+    app.register_blueprint(camera_bp)
+except ImportError as e:
+    print(f">> Enhanced features not available: {e}")
+    USE_ENHANCED_FEATURES = False
+
+# Try enhanced detector, fallback to basic
+try:
+    from enhanced_detector import initialize_detector as enhanced_initialize_detector, process_frame as enhanced_process_frame
+    USE_ENHANCED_DETECTOR = True
+    print(">> Enhanced detector loaded")
+except ImportError as e:
+    print(f">> Enhanced detector not available, using basic detector: {e}")
+    USE_ENHANCED_DETECTOR = False
+
 # Initialize SocketIO
 socketio = SocketIO(app, cors_allowed_origins="*")
 
@@ -1458,4 +1479,4 @@ def initialize_app():
 
 if __name__ == '__main__':
     initialize_app()
-    socketio.run(app, debug=False, host='0.0.0.0', port=5000)
+    socketio.run(app, debug=False, host='0.0.0.0', port=5001)

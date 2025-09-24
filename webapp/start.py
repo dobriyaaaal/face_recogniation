@@ -43,7 +43,7 @@ def main():
         sys.stderr = old_stderr
     
     print(">> Ready!")
-    print(">> Web interface: http://localhost:5000")
+    print(">> Web interface: http://localhost:5001")
     
     # Get local IP
     try:
@@ -51,15 +51,15 @@ def main():
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
             local_ip = s.getsockname()[0]
-        print(f">> Network access: http://{local_ip}:5000")
+        print(f">> Network access: http://{local_ip}:5001")
     except:
-        print(">> Network access: http://localhost:5000")
+        print(">> Network access: http://localhost:5001")
     
     print(">> Press CTRL+C to stop\n")
     
     try:
         initialize_app()
-        socketio.run(app, debug=False, host='0.0.0.0', port=5000, log_output=False)
+        socketio.run(app, debug=False, host='0.0.0.0', port=5001, log_output=False)
     except KeyboardInterrupt:
         print("\n>> Face Recognition System stopped")
     except Exception as e:

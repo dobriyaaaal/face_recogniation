@@ -1,0 +1,456 @@
+/* Enhanced Camera Management Styles */
+
+.camera-detection-section {
+    background: rgba(30, 41, 59, 0.8);
+    border-radius: 12px;
+    padding: 20px;
+    margin: 20px 0;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.camera-detection-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 15px;
+}
+
+.camera-detection-header h3 {
+    color: #f1f5f9;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.detect-btn {
+    background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 20px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.detect-btn:hover {
+    background: linear-gradient(135deg, #2563eb, #1e40af);
+    transform: translateY(-1px);
+}
+
+.detect-btn:disabled {
+    background: #64748b;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.camera-dropdown-container {
+    margin: 15px 0;
+}
+
+.camera-dropdown-container label {
+    display: block;
+    color: #e2e8f0;
+    font-weight: 500;
+    margin-bottom: 8px;
+}
+
+#cameraDropdown {
+    width: 100%;
+    background: rgba(15, 23, 42, 0.8);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 8px;
+    padding: 12px;
+    color: #f1f5f9;
+    font-size: 14px;
+    cursor: pointer;
+    transition: border-color 0.3s ease;
+}
+
+#cameraDropdown:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+#cameraDropdown:disabled {
+    background: rgba(15, 23, 42, 0.4);
+    color: #64748b;
+    cursor: not-allowed;
+}
+
+#cameraDropdown option {
+    background: #1e293b;
+    color: #f1f5f9;
+    padding: 8px;
+}
+
+#cameraDropdown optgroup {
+    background: #0f172a;
+    color: #94a3b8;
+    font-weight: bold;
+}
+
+.manual-url-section {
+    margin: 15px 0;
+    padding: 15px;
+    background: rgba(15, 23, 42, 0.6);
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    display: none;
+}
+
+.manual-url-section label {
+    display: block;
+    color: #e2e8f0;
+    font-weight: 500;
+    margin-bottom: 8px;
+}
+
+#manualCameraUrl {
+    width: 100%;
+    background: rgba(30, 41, 59, 0.8);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 6px;
+    padding: 10px;
+    color: #f1f5f9;
+    font-family: 'Monaco', 'Consolas', monospace;
+    font-size: 13px;
+}
+
+#manualCameraUrl:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.camera-controls {
+    display: none;
+    margin: 20px 0;
+}
+
+.test-camera-btn {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 24px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-right: 10px;
+}
+
+.test-camera-btn:hover {
+    background: linear-gradient(135deg, #059669, #047857);
+    transform: translateY(-1px);
+}
+
+.test-camera-btn:disabled {
+    background: #64748b;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.status-message {
+    padding: 10px 15px;
+    border-radius: 6px;
+    margin: 10px 0;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.status-message.info {
+    background: rgba(59, 130, 246, 0.2);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    color: #93c5fd;
+}
+
+.status-message.success {
+    background: rgba(16, 185, 129, 0.2);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    color: #6ee7b7;
+}
+
+.status-message.warning {
+    background: rgba(245, 158, 11, 0.2);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: #fcd34d;
+}
+
+.status-message.error {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #fca5a5;
+}
+
+.platform-info {
+    background: rgba(15, 23, 42, 0.6);
+    border-radius: 8px;
+    padding: 15px;
+    margin: 15px 0;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.platform-info h4 {
+    color: #f1f5f9;
+    margin: 0 0 10px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.hardware-recommendations {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.recommendation {
+    color: #cbd5e1;
+    font-size: 14px;
+    padding: 5px 0;
+}
+
+.test-results {
+    background: rgba(15, 23, 42, 0.6);
+    border-radius: 8px;
+    padding: 15px;
+    margin: 15px 0;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.test-results h4 {
+    color: #6ee7b7;
+    margin: 0 0 15px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.result-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.result-item:last-child {
+    border-bottom: none;
+}
+
+.result-item strong {
+    color: #e2e8f0;
+}
+
+.result-item .success {
+    color: #6ee7b7;
+    font-weight: 500;
+}
+
+.recommended-settings {
+    margin-top: 15px;
+    padding: 10px;
+    background: rgba(59, 130, 246, 0.1);
+    border-radius: 6px;
+    border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.recommended-settings h5 {
+    color: #93c5fd;
+    margin: 0 0 8px 0;
+}
+
+.setting-item {
+    color: #cbd5e1;
+    font-size: 13px;
+    padding: 2px 0;
+}
+
+.url-builder {
+    background: rgba(15, 23, 42, 0.6);
+    border-radius: 8px;
+    padding: 20px;
+    margin: 15px 0;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.url-builder h4 {
+    color: #f1f5f9;
+    margin: 0 0 15px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.template-info {
+    background: rgba(30, 41, 59, 0.6);
+    padding: 12px;
+    border-radius: 6px;
+    margin-bottom: 15px;
+    color: #cbd5e1;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.template-info code {
+    background: rgba(15, 23, 42, 0.8);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Monaco', 'Consolas', monospace;
+    color: #fbbf24;
+}
+
+.builder-form {
+    display: grid;
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.form-row label {
+    color: #e2e8f0;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+.form-row input {
+    background: rgba(30, 41, 59, 0.8);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 6px;
+    padding: 10px;
+    color: #f1f5f9;
+    font-size: 14px;
+}
+
+.form-row input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.built-urls {
+    margin-top: 20px;
+}
+
+.built-urls h5 {
+    color: #f1f5f9;
+    margin: 0 0 15px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.url-item {
+    background: rgba(30, 41, 59, 0.6);
+    border-radius: 6px;
+    padding: 15px;
+    margin-bottom: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.url-name {
+    color: #e2e8f0;
+    font-weight: 500;
+    margin-bottom: 8px;
+}
+
+.url-value {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.url-value code {
+    flex: 1;
+    background: rgba(15, 23, 42, 0.8);
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-family: 'Monaco', 'Consolas', monospace;
+    color: #fbbf24;
+    font-size: 12px;
+    word-break: break-all;
+    min-width: 0;
+}
+
+.btn {
+    padding: 6px 12px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+}
+
+.btn-sm {
+    padding: 4px 8px;
+    font-size: 11px;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: linear-gradient(135deg, #2563eb, #1e40af);
+}
+
+.btn-success {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: white;
+}
+
+.btn-success:hover {
+    background: linear-gradient(135deg, #059669, #047857);
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    color: #cbd5e1;
+}
+
+.btn-outline:hover {
+    background: rgba(148, 163, 184, 0.1);
+    border-color: rgba(148, 163, 184, 0.5);
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .camera-detection-header {
+        flex-direction: column;
+        gap: 10px;
+        align-items: stretch;
+    }
+    
+    .url-value {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .url-value code {
+        margin-bottom: 10px;
+    }
+    
+    .builder-form {
+        gap: 10px;
+    }
+}
