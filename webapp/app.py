@@ -6,6 +6,7 @@ import os
 import sys
 import warnings
 import logging
+import re
 
 # Suppress specific warnings before importing other modules
 warnings.filterwarnings("ignore", category=UserWarning, module="pygame")
@@ -84,8 +85,14 @@ def connect_camera_with_timeout(stream_url, timeout=10):
         try:
             print(f">> Creating VideoCapture for {stream_url}")
             
+            # Convert string camera indices to integers for OpenCV
+            camera_url = stream_url
+            if isinstance(stream_url, str) and stream_url.isdigit():
+                camera_url = int(stream_url)
+                print(f">> Converting camera index '{stream_url}' to integer {camera_url}")
+            
             # RTSP-specific optimizations
-            if 'rtsp://' in stream_url.lower():
+            if isinstance(stream_url, str) and 'rtsp://' in stream_url.lower():
                 print(f">> Applying working RTSP optimizations...")
                 
                 # Try the approaches that work (based on test results)
@@ -179,20 +186,38 @@ def connect_camera_with_timeout(stream_url, timeout=10):
                 return None, False, "All RTSP attempts failed"
             
             else:
-                # Standard approach for HTTP streams
-                cap = cv2.VideoCapture(stream_url)
+                # Handle camera indices and HTTP streams
+                print(f">> Connecting to camera/stream: {camera_url} (type: {type(camera_url)})")
+                
+                # For camera indices (integers), use direct connection
+                if isinstance(camera_url, int):
+                    print(f">> Using camera index {camera_url}")
+                    cap = cv2.VideoCapture(camera_url)
+                else:
+                    # HTTP streams and other string URLs
+                    cap = cv2.VideoCapture(camera_url)
+                
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 
                 print(f">> Checking if VideoCapture is opened...")
                 if cap.isOpened():
                     ret, frame = cap.read()
                     if ret and frame is not None:
-                        return cap, True, "HTTP stream success"
+                        if isinstance(camera_url, int):
+                            return cap, True, f"Camera index {camera_url} connected successfully"
+                        else:
+                            return cap, True, "HTTP stream success"
                     else:
                         cap.release()
-                        return None, False, "Cannot read HTTP frames"
+                        if isinstance(camera_url, int):
+                            return None, False, f"Cannot read from camera index {camera_url}"
+                        else:
+                            return None, False, "Cannot read HTTP frames"
                 else:
-                    return None, False, "Cannot open HTTP stream"
+                    if isinstance(camera_url, int):
+                        return None, False, f"Cannot open camera index {camera_url}"
+                    else:
+                        return None, False, "Cannot open HTTP stream"
                     
         except Exception as e:
             print(f">> Exception during connection: {e}")
@@ -215,7 +240,7 @@ detection_frames = {}  # Store latest frames for each camera
 detection_results = {}  # Store latest detection results
 
 # Timezone configuration
-LOCAL_TIMEZONE = pytz.timezone('America/New_York')
+LOCAL_TIMEZONE = pytz.timezone('Asia/Kolkata')  # IST (Indian Standard Time)
 recent_alerts = []
 
 # Add archive/libs to Python path for detector
@@ -318,11 +343,21 @@ def play_alert_sound():
     """Play alert sound"""
     try:
         if os.path.exists(ALERT_SOUND_FILE):
-            pygame.mixer.init()
+            # Initialize pygame mixer if not already initialized
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+            
+            # Stop any currently playing sound
+            pygame.mixer.music.stop()
+            
+            # Load and play the sound
             pygame.mixer.music.load(ALERT_SOUND_FILE)
             pygame.mixer.music.play()
+            print(f">> Playing alert sound: {ALERT_SOUND_FILE}")
+        else:
+            print(f">> Alert sound file not found: {ALERT_SOUND_FILE}")
     except Exception as e:
-        print(f"Alert sound error: {e}")
+        print(f">> Alert sound error: {e}")
 
 def send_alert_notification(person_name, confidence, camera_source):
     """Send real-time alert"""
@@ -351,14 +386,20 @@ def save_detection_image(image_data, person_name, timestamp_info):
         filepath = os.path.join(date_folder, filename)
         
         if isinstance(image_data, np.ndarray):
-            cv2.imwrite(filepath, image_data)
+            success = cv2.imwrite(filepath, image_data)
+            if success:
+                print(f">> Detection image saved: {filepath}")
+            else:
+                print(f">> Failed to save detection image: {filepath}")
+                return None
         else:
             with open(filepath, 'wb') as f:
                 f.write(image_data)
+            print(f">> Detection image saved: {filepath}")
         
         return filepath
     except Exception as e:
-        print(f"Error saving detection image: {e}")
+        print(f">> Error saving detection image: {e}")
         return None
 
 def format_timestamp_for_timezone(utc_timestamp):
@@ -395,6 +436,166 @@ def format_timestamp_for_timezone(utc_timestamp):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/api/detections')
+def get_detections():
+    """Get all detections with gallery organization"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Get detections ordered by most recent first
+        cursor.execute('''
+            SELECT id, person_name, confidence, camera_source, detection_time, detection_image
+            FROM detections 
+            ORDER BY detection_time DESC
+            LIMIT 100
+        ''')
+        
+        detections = []
+        for row in cursor.fetchall():
+            detection = {
+                'id': row[0],
+                'person_name': row[1],
+                'confidence': float(row[2]) if row[2] else 0.0,
+                'camera_source': row[3],
+                'detection_time': row[4],
+                'detection_image': row[5]
+            }
+            detections.append(detection)
+        
+        conn.close()
+        return jsonify({'success': True, 'detections': detections})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e), 'detections': []})
+
+@app.route('/api/gallery/dates')
+def get_gallery_dates():
+    """Get available dates in gallery"""
+    try:
+        dates = []
+        if os.path.exists(GALLERY_FOLDER):
+            for item in os.listdir(GALLERY_FOLDER):
+                date_path = os.path.join(GALLERY_FOLDER, item)
+                if os.path.isdir(date_path) and re.match(r'\d{4}-\d{2}-\d{2}', item):
+                    # Count images in this date folder
+                    image_count = len([f for f in os.listdir(date_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
+                    dates.append({
+                        'date': item,
+                        'image_count': image_count,
+                        'formatted_date': datetime.strptime(item, '%Y-%m-%d').strftime('%d %B %Y')
+                    })
+        
+        # Sort by date (newest first)
+        dates.sort(key=lambda x: x['date'], reverse=True)
+        return jsonify({'success': True, 'dates': dates})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e), 'dates': []})
+
+@app.route('/api/gallery/images/<date>')
+def get_gallery_images(date):
+    """Get images for a specific date"""
+    try:
+        date_folder = os.path.join(GALLERY_FOLDER, date)
+        images = []
+        
+        if os.path.exists(date_folder):
+            for filename in os.listdir(date_folder):
+                if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    filepath = os.path.join(date_folder, filename)
+                    # Extract person name and time from filename
+                    # Format: HH-MM-SS_AM/PM_PersonName.jpg
+                    parts = filename.replace('.jpg', '').split('_')
+                    time_part = parts[0] if parts else 'Unknown'
+                    am_pm = parts[1] if len(parts) > 1 else ''
+                    person_name = '_'.join(parts[2:]) if len(parts) > 2 else 'Unknown'
+                    
+                    formatted_time = f"{time_part} {am_pm}".replace('-', ':')
+                    
+                    images.append({
+                        'filename': filename,
+                        'person_name': person_name,
+                        'time': formatted_time,
+                        'path': f'/api/gallery/image/{date}/{filename}',
+                        'timestamp': os.path.getmtime(filepath)
+                    })
+        
+        # Sort by timestamp (newest first)
+        images.sort(key=lambda x: x['timestamp'], reverse=True)
+        return jsonify({'success': True, 'images': images})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e), 'images': []})
+
+@app.route('/api/gallery/image/<date>/<filename>')
+def get_gallery_image(date, filename):
+    """Serve a specific gallery image"""
+    try:
+        image_path = os.path.join(GALLERY_FOLDER, date, filename)
+        if os.path.exists(image_path):
+            return send_file(image_path, as_attachment=False)
+        else:
+            return "Image not found", 404
+    except Exception as e:
+        return f"Error: {str(e)}", 500
+
+# Camera detection compatibility endpoint
+@app.route('/api/camera/detect', methods=['GET'])
+def detect_cameras_basic():
+    """Basic camera detection - forwards to enhanced endpoint if available"""
+    try:
+        if USE_ENHANCED_FEATURES:
+            # Forward to enhanced camera detection
+            from camera_manager import camera_manager
+            cameras = camera_manager.detect_available_cameras()
+            return jsonify({
+                'success': True,
+                'cameras': cameras,
+                'total_detected': len(cameras)
+            })
+        else:
+            # Basic camera detection using OpenCV
+            cameras = []
+            print(">> Testing basic camera detection...")
+            
+            # Test first few camera indices
+            for i in range(5):
+                try:
+                    cap = cv2.VideoCapture(i)
+                    if cap.isOpened():
+                        ret, frame = cap.read()
+                        if ret and frame is not None:
+                            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                            cameras.append({
+                                'id': f'camera_{i}',
+                                'name': f'Camera {i}' if i > 0 else 'Built-in Camera',
+                                'url': str(i),
+                                'type': 'builtin' if i == 0 else 'usb',
+                                'resolution': f'{width}x{height}',
+                                'status': 'available',
+                                'backend': 'opencv'
+                            })
+                    cap.release()
+                except Exception as e:
+                    continue
+            
+            return jsonify({
+                'success': True,
+                'cameras': cameras,
+                'total_detected': len(cameras)
+            })
+            
+    except Exception as e:
+        print(f"Camera detection error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'cameras': [],
+            'total_detected': 0
+        })
 
 @app.route('/api/camera/test', methods=['POST'])
 def test_camera():
@@ -442,28 +643,71 @@ active_streams = {}
 
 @app.route('/api/camera/stream/<int:stream_id>')
 def video_stream(stream_id):
-    """Stream live video from camera"""
+    """Stream live video from camera with optimized performance"""
     def generate_frames(camera_url):
         cap = cv2.VideoCapture(camera_url)
         if not cap.isOpened():
             return
         
+        # Detect if this is an RTSP stream
+        is_rtsp = isinstance(camera_url, str) and 'rtsp://' in camera_url.lower()
+        
+        if is_rtsp:
+            print(f">> RTSP stream detected for video feed, applying aggressive optimizations")
+            # Aggressive RTSP optimizations for web streaming
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffer
+            cap.set(cv2.CAP_PROP_FPS, 15)  # Lower FPS for RTSP
+            frame_skip_rate = 4  # Skip more frames for RTSP (every 4th frame)
+        else:
+            # Optimize camera settings for performance
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer to minimize lag
+            cap.set(cv2.CAP_PROP_FPS, 30)  # Set target frame rate
+            frame_skip_rate = 2  # Skip every 2nd frame for regular cameras
+        
         try:
+            frame_count = 0
+            consecutive_failures = 0
+            
             while True:
+                # For RTSP: Flush buffer by reading multiple frames
+                if is_rtsp and frame_count % 10 == 0:
+                    # Every 10th iteration, flush the buffer
+                    for _ in range(2):
+                        temp_ret, _ = cap.read()
+                        if not temp_ret:
+                            break
+                
                 ret, frame = cap.read()
                 if not ret:
-                    break
+                    consecutive_failures += 1
+                    if consecutive_failures > 5:
+                        print(f">> Stream connection lost after {consecutive_failures} failures")
+                        break
+                    continue
                 
-                # Resize frame for web streaming
+                consecutive_failures = 0  # Reset failure counter
+                
+                # Skip frames to maintain performance
+                frame_count += 1
+                if frame_count % frame_skip_rate != 0:
+                    continue
+                
+                # Resize frame for web streaming (smaller size for better performance)
                 height, width = frame.shape[:2]
-                if width > 640:
-                    ratio = 640 / width
-                    new_width = 640
-                    new_height = int(height * ratio)
-                    frame = cv2.resize(frame, (new_width, new_height))
+                target_width = 320 if is_rtsp else 480  # Even smaller for RTSP
                 
-                # Encode frame as JPEG
-                ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if width > target_width:
+                    ratio = target_width / width
+                    new_width = target_width
+                    new_height = int(height * ratio)
+                    frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
+                
+                # Encode frame as JPEG with balanced quality/performance
+                jpeg_quality = 50 if is_rtsp else 60  # Lower quality for RTSP
+                ret, buffer = cv2.imencode('.jpg', frame, [
+                    cv2.IMWRITE_JPEG_QUALITY, jpeg_quality,
+                    cv2.IMWRITE_JPEG_OPTIMIZE, 1
+                ])
                 if not ret:
                     continue
                     
@@ -472,6 +716,9 @@ def video_stream(stream_id):
                 # Yield frame in multipart format
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                
+                # Adaptive sleep timing based on stream type
+                time.sleep(0.05 if is_rtsp else 0.03)  # Less delay for streaming
                 
         finally:
             cap.release()
@@ -746,22 +993,64 @@ def video_stream_by_url():
         if not cap.isOpened():
             return
         
+        # Detect if this is an RTSP stream
+        is_rtsp = isinstance(url, str) and 'rtsp://' in url.lower()
+        
+        if is_rtsp:
+            print(f">> RTSP stream detected for URL streaming, applying aggressive optimizations")
+            # Aggressive RTSP optimizations
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffer
+            cap.set(cv2.CAP_PROP_FPS, 15)  # Lower FPS for RTSP
+            frame_skip_rate = 4  # Skip more frames for RTSP
+        else:
+            # Optimize camera settings for performance
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer to minimize lag
+            cap.set(cv2.CAP_PROP_FPS, 30)  # Set target frame rate
+            frame_skip_rate = 2  # Regular frame skipping
+        
         try:
+            frame_count = 0
+            consecutive_failures = 0
+            
             while True:
+                # For RTSP: Periodic buffer flush
+                if is_rtsp and frame_count % 8 == 0:
+                    # Flush buffer more frequently for URL streaming
+                    for _ in range(2):
+                        temp_ret, _ = cap.read()
+                        if not temp_ret:
+                            break
+                
                 ret, frame = cap.read()
                 if not ret:
-                    break
+                    consecutive_failures += 1
+                    if consecutive_failures > 5:
+                        break
+                    continue
                 
-                # Resize frame for web streaming
+                consecutive_failures = 0
+                
+                # Skip frames to maintain performance
+                frame_count += 1
+                if frame_count % frame_skip_rate != 0:
+                    continue
+                
+                # Resize frame for web streaming (optimized size)
                 height, width = frame.shape[:2]
-                if width > 640:
-                    ratio = 640 / width
-                    new_width = 640
-                    new_height = int(height * ratio)
-                    frame = cv2.resize(frame, (new_width, new_height))
+                target_width = 320 if is_rtsp else 480  # Smaller for RTSP
                 
-                # Encode frame as JPEG
-                ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if width > target_width:
+                    ratio = target_width / width
+                    new_width = target_width
+                    new_height = int(height * ratio)
+                    frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
+                
+                # Encode frame as JPEG with balanced quality/performance
+                jpeg_quality = 45 if is_rtsp else 60  # Lower quality for RTSP
+                ret, buffer = cv2.imencode('.jpg', frame, [
+                    cv2.IMWRITE_JPEG_QUALITY, jpeg_quality,
+                    cv2.IMWRITE_JPEG_OPTIMIZE, 1
+                ])
                 if not ret:
                     continue
                     
@@ -770,6 +1059,9 @@ def video_stream_by_url():
                 # Yield frame in multipart format
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                
+                # Adaptive sleep timing based on stream type
+                time.sleep(0.05 if is_rtsp else 0.03)  # Less delay for URL streaming
                 
         finally:
             cap.release()
@@ -783,8 +1075,8 @@ def add_stream():
     """Add a new camera stream"""
     try:
         data = request.get_json()
-        name = data.get('name', '')
-        url = data.get('url', '')
+        name = data.get('name', '').strip()
+        url = data.get('url', '').strip()
         
         if not name or not url:
             return jsonify({'success': False, 'error': 'Name and URL are required'})
@@ -792,8 +1084,30 @@ def add_stream():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
+        # Check if camera already exists (by URL)
+        cursor.execute('SELECT id, name FROM streams WHERE url = ?', (url,))
+        existing = cursor.fetchone()
+        
+        if existing:
+            conn.close()
+            return jsonify({
+                'success': False, 
+                'error': f'Camera with this URL already exists as "{existing[1]}"'
+            })
+        
+        # Check if name already exists
+        cursor.execute('SELECT id FROM streams WHERE name = ?', (name,))
+        existing_name = cursor.fetchone()
+        
+        if existing_name:
+            conn.close()
+            return jsonify({
+                'success': False, 
+                'error': f'Camera with name "{name}" already exists'
+            })
+        
         cursor.execute('''
-            INSERT INTO streams (name, url) VALUES (?, ?)
+            INSERT INTO streams (name, url, active) VALUES (?, ?, 1)
         ''', (name, url))
         
         conn.commit()
@@ -811,11 +1125,11 @@ def get_streams():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        cursor.execute('SELECT id, name, url FROM streams WHERE active = 1')
+        cursor.execute('SELECT id, name, url, active FROM streams')
         rows = cursor.fetchall()
         conn.close()
         
-        streams = [{'id': row[0], 'name': row[1], 'url': row[2]} for row in rows]
+        streams = [{'id': row[0], 'name': row[1], 'url': row[2], 'active': bool(row[3])} for row in rows]
         
         return jsonify({'success': True, 'streams': streams})
         
@@ -829,11 +1143,16 @@ def delete_stream(stream_id):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        cursor.execute('UPDATE streams SET active = 0 WHERE id = ?', (stream_id,))
+        # Actually delete the record instead of just setting active = 0
+        cursor.execute('DELETE FROM streams WHERE id = ?', (stream_id,))
+        deleted_rows = cursor.rowcount
         conn.commit()
         conn.close()
         
-        return jsonify({'success': True, 'message': 'Stream deleted successfully'})
+        if deleted_rows > 0:
+            return jsonify({'success': True, 'message': 'Stream deleted successfully'})
+        else:
+            return jsonify({'success': False, 'error': 'Stream not found'})
         
     except Exception as e:
         return jsonify({'success': False, 'error': f'Failed to delete stream: {str(e)}'})
@@ -1202,10 +1521,23 @@ def start_detection():
                         cap, success, message = connect_camera_with_timeout(stream_url, timeout=timeout_duration)
                         
                         if success and cap:
+                            # Apply aggressive RTSP optimizations for minimal latency
+                            if 'rtsp://' in stream_url.lower():
+                                print(f">> Applying RTSP latency optimizations for {stream_name}")
+                                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffer
+                                cap.set(cv2.CAP_PROP_FPS, 10)  # Lower FPS for RTSP
+                                # Try to set low-latency options if supported
+                                try:
+                                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('H','2','6','4'))
+                                except:
+                                    pass
+                            
                             camera_caps[stream_id] = {
                                 'cap': cap,
                                 'name': stream_name,
-                                'url': stream_url
+                                'url': stream_url,
+                                'is_rtsp': 'rtsp://' in stream_url.lower(),
+                                'frame_skip_counter': 0
                             }
                             success_msg = f'✅ Connected to "{stream_name}" ({i+1}/{len(active_streams)})'
                             print(f">> Connected to camera: {stream_name}")
@@ -1248,8 +1580,11 @@ def start_detection():
                 })
                 
                 frame_count = 0
+                last_process_time = {}  # Track last processing time per camera
+                
                 while detection_running:
                     frame_count += 1
+                    current_time = time.time()
                     
                     for stream_id, stream_data in camera_caps.items():
                         if not detection_running:
@@ -1257,79 +1592,127 @@ def start_detection():
                             
                         cap = stream_data['cap']
                         stream_name = stream_data['name']
+                        is_rtsp = stream_data.get('is_rtsp', False)
                         
-                        ret, frame = cap.read()
-                        if not ret:
-                            print(f">> Lost connection to {stream_name}, attempting reconnect...")
-                            # Try to reconnect
-                            cap.release()
-                            try:
-                                new_cap = cv2.VideoCapture(stream_data['url'])
-                                if new_cap.isOpened():
-                                    ret, frame = new_cap.read()
-                                    if ret:
-                                        camera_caps[stream_id]['cap'] = new_cap
-                                        print(f">> Reconnected to {stream_name}")
-                                        # Store frame for live feed
-                                        detection_frames[stream_id] = frame.copy()
-                                    else:
-                                        new_cap.release()
-                                        print(f">> Reconnection failed for {stream_name}")
-                                        continue
-                                else:
-                                    print(f">> Cannot reconnect to {stream_name}")
-                                    continue
-                            except Exception as e:
-                                print(f">> Reconnection error for {stream_name}: {e}")
-                                continue
-                        else:
-                            # Store frame for live feed
-                            detection_frames[stream_id] = frame.copy()
-                        
-                        # Process every 5th frame to reduce CPU load
-                        if frame_count % 5 != 0:
-                            continue
-                        
-                        # Process frame for face detection
-                        result = process_frame(frame, detector)
-                        
-                        # Store detection result for live feed
-                        detection_results[stream_id] = result
-                        
-                        if result and result.get('detected'):
-                            person_name = result.get('name', 'Unknown')
-                            confidence = result.get('confidence', 0.0)
+                        # RTSP-specific optimizations
+                        if is_rtsp:
+                            # For RTSP: Skip many more frames and flush buffer
+                            stream_data['frame_skip_counter'] = stream_data.get('frame_skip_counter', 0) + 1
                             
-                            if confidence > 0.7:  # Confidence threshold
-                                # Save detection
-                                timestamp_info = format_timestamp_for_timezone(datetime.now())
+                            # Process RTSP frames much less frequently (every 15 frames)
+                            should_process = stream_data['frame_skip_counter'] % 15 == 0
+                            
+                            # Flush buffer by reading multiple frames quickly
+                            frames_flushed = 0
+                            while frames_flushed < 3:  # Read and discard up to 3 frames
+                                ret, frame = cap.read()
+                                if not ret:
+                                    break
+                                frames_flushed += 1
+                            
+                            if not ret or frame is None:
+                                print(f">> Lost RTSP connection to {stream_name}, attempting reconnect...")
+                                # Try to reconnect RTSP stream
+                                cap.release()
+                                try:
+                                    print(f">> Reconnecting to RTSP stream: {stream_data['url']}")
+                                    new_cap, success, message = connect_camera_with_timeout(stream_data['url'], timeout=30)
+                                    if success and new_cap:
+                                        # Apply RTSP optimizations to new connection
+                                        new_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                                        new_cap.set(cv2.CAP_PROP_FPS, 10)
+                                        camera_caps[stream_id]['cap'] = new_cap
+                                        print(f">> Reconnected to RTSP {stream_name}")
+                                        # Get fresh frame
+                                        ret, frame = new_cap.read()
+                                        if ret:
+                                            detection_frames[stream_id] = frame.copy()
+                                    else:
+                                        print(f">> RTSP reconnection failed for {stream_name}: {message}")
+                                        continue
+                                except Exception as e:
+                                    print(f">> RTSP reconnection error for {stream_name}: {e}")
+                                    continue
+                        else:
+                            # Non-RTSP cameras: normal frame reading
+                            ret, frame = cap.read()
+                            should_process = frame_count % 5 == 0  # Process every 5th frame for regular cameras
+                            
+                            if not ret:
+                                print(f">> Lost connection to {stream_name}, attempting reconnect...")
+                                cap.release()
+                                try:
+                                    new_cap = cv2.VideoCapture(stream_data['url'])
+                                    if new_cap.isOpened():
+                                        ret, frame = new_cap.read()
+                                        if ret:
+                                            camera_caps[stream_id]['cap'] = new_cap
+                                            print(f">> Reconnected to {stream_name}")
+                                            detection_frames[stream_id] = frame.copy()
+                                        else:
+                                            new_cap.release()
+                                            print(f">> Reconnection failed for {stream_name}")
+                                            continue
+                                    else:
+                                        print(f">> Cannot reconnect to {stream_name}")
+                                        continue
+                                except Exception as e:
+                                    print(f">> Reconnection error for {stream_name}: {e}")
+                                    continue
+                            
+                        if ret and frame is not None:
+                            # Always store the latest frame for live feed
+                            detection_frames[stream_id] = frame.copy()
+                            
+                            # Only process frames at the specified interval
+                            if should_process:
+                                last_process_time[stream_id] = current_time
+                                print(f">> Processing frame from {stream_name} ({'RTSP' if is_rtsp else 'Standard'})")
                                 
-                                # Save detection image
-                                detection_image_path = save_detection_image(
-                                    result.get('face_image', frame), 
-                                    person_name, 
-                                    timestamp_info
-                                )
+                                # Process frame for face detection
+                                result = process_frame(frame, detector)
                                 
-                                # Save to database
-                                conn = sqlite3.connect(DB_PATH)
-                                cursor = conn.cursor()
+                                # Store detection result for live feed
+                                detection_results[stream_id] = result
                                 
-                                cursor.execute('''
-                                    INSERT INTO detections (person_name, confidence, camera_source, detection_time, detection_image)
-                                    VALUES (?, ?, ?, ?, ?)
-                                ''', (person_name, confidence, stream_name, timestamp_info['timestamp'], detection_image_path))
-                                
-                                conn.commit()
-                                conn.close()
-                                
-                                # Send alerts
-                                send_alert_notification(person_name, confidence, stream_name)
-                                play_alert_sound()
-                                
-                                print(f">> Detected {person_name} (confidence: {confidence:.2f}) on {stream_name}")
+                                if result and result.get('detected'):
+                                    person_name = result.get('name', 'Unknown')
+                                    confidence = result.get('confidence', 0.0)
+                                    
+                                    if confidence > 0.3:  # Confidence threshold (lowered for testing)
+                                        # Save detection
+                                        timestamp_info = format_timestamp_for_timezone(datetime.now())
+                                        
+                                        # Save detection image
+                                        detection_image_path = save_detection_image(
+                                            result.get('face_image', frame), 
+                                            person_name, 
+                                            timestamp_info
+                                        )
+                                        
+                                        # Save to database
+                                        conn = sqlite3.connect(DB_PATH)
+                                        cursor = conn.cursor()
+                                        
+                                        cursor.execute('''
+                                            INSERT INTO detections (person_name, confidence, camera_source, detection_time, detection_image)
+                                            VALUES (?, ?, ?, ?, ?)
+                                        ''', (person_name, confidence, stream_name, timestamp_info['timestamp'], detection_image_path))
+                                        
+                                        conn.commit()
+                                        conn.close()
+                                        
+                                        # Send alerts
+                                        send_alert_notification(person_name, confidence, stream_name)
+                                        play_alert_sound()
+                                        
+                                        print(f">> Detected {person_name} (confidence: {confidence:.2f}) on {stream_name}")
                     
-                    time.sleep(0.2)  # Small delay
+                    # Adaptive sleep based on camera types
+                    if any(stream_data.get('is_rtsp', False) for stream_data in camera_caps.values()):
+                        time.sleep(0.1)  # Shorter sleep for RTSP to flush buffers faster
+                    else:
+                        time.sleep(0.2)  # Normal sleep for regular cameras
                 
             except Exception as e:
                 print(f">> Detection worker error: {e}")
@@ -1368,38 +1751,6 @@ def stop_detection():
         return jsonify({'success': True, 'message': 'Detection stopped successfully'})
     except Exception as e:
         return jsonify({'success': False, 'error': f'Failed to stop detection: {str(e)}'})
-
-@app.route('/api/detections')
-def get_detections():
-    """Get recent detections"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT person_name, confidence, camera_source, detection_time, detection_image
-            FROM detections
-            ORDER BY detection_time DESC
-            LIMIT 50
-        ''')
-        
-        rows = cursor.fetchall()
-        conn.close()
-        
-        detections = []
-        for row in rows:
-            detections.append({
-                'person_name': row[0],
-                'confidence': row[1],
-                'camera_source': row[2],
-                'detection_time': row[3],
-                'detection_image': row[4]
-            })
-        
-        return jsonify({'success': True, 'detections': detections})
-        
-    except Exception as e:
-        return jsonify({'success': False, 'error': f'Failed to load detections: {str(e)}', 'detections': []})
 
 @app.route('/api/detection/feed/<int:stream_id>')
 def detection_feed(stream_id):

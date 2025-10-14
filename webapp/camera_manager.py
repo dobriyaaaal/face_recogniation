@@ -8,19 +8,17 @@ import sys
 import platform
 import subprocess
 import signal
+import threading
+import time
+import json
 from typing import List, Dict, Tuple, Optional, Any
+
+# Set OpenCV environment variables for macOS camera authorization
+os.environ['OPENCV_AVFOUNDATION_SKIP_AUTH'] = '1'
 
 # Import availability flags
 CV2_AVAILABLE = True
 PSUTIL_AVAILABLE = True
-import os
-import sys
-import platform
-import subprocess
-import threading
-import time
-from typing import List, Dict, Tuple, Optional
-import json
 
 # Import dependencies with fallbacks
 try:
@@ -62,9 +60,6 @@ class CameraManager:
             cameras.extend(self._detect_windows_cameras())
         elif self.platform_name == 'linux':
             cameras.extend(self._detect_linux_cameras())
-            
-        # Add common network camera examples
-        cameras.extend(self._get_network_camera_templates())
         
         self.detected_cameras = cameras
         return cameras
@@ -90,29 +85,34 @@ class CameraManager:
                         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                         fps = int(cap.get(cv2.CAP_PROP_FPS))
                         
+                        # Determine camera type and name
+                        if i == 0:
+                            camera_name = 'Built-in Camera'
+                            camera_type = 'builtin'
+                        else:
+                            # Check if it's a Continuity Camera (iPhone/iPad)
+                            if width == 1280 and height == 720:
+                                camera_name = f'iPhone Camera (Continuity)'
+                                camera_type = 'continuity'
+                            else:
+                                camera_name = f'USB Camera {i}'
+                                camera_type = 'usb'
+                        
                         camera_info = {
                             'id': f'camera_{i}',
-                            'name': f'Camera {i}',
-                            'url': str(i),
-                            'type': 'builtin' if i == 0 else 'usb',
+                            'name': camera_name,
+                            'url': i,  # Store as integer, not string
+                            'type': camera_type,
                             'platform': self.platform_name,
                             'resolution': f'{width}x{height}',
                             'fps': fps,
                             'status': 'available',
-                            'backend': 'opencv_index'
+                            'backend': 'opencv_index',
+                            'index': i  # Also store the index explicitly
                         }
                         
-                        # Try to get more specific name based on platform
-                        if i == 0:
-                            if self.platform_name == 'darwin':
-                                camera_info['name'] = 'FaceTime HD Camera (Built-in)'
-                            elif self.platform_name == 'windows':
-                                camera_info['name'] = 'Integrated Camera (Built-in)'
-                            else:
-                                camera_info['name'] = 'Built-in Camera'
-                        
                         cameras.append(camera_info)
-                        print(f">> Found {camera_info['name']}: {width}x{height} @ {fps}fps")
+                        print(f">> Found {camera_name}: {width}x{height} @ {fps}fps")
                 
                 cap.release()
                 

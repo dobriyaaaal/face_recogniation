@@ -250,7 +250,7 @@
             const loadDetectedCameras = async () => {
                 setLoadingCameras(true);
                 try {
-                    const response = await fetch('/api/camera/detect');
+                    const response = await fetch('/api/cameras/detect');
                     if (response.ok) {
                         const data = await response.json();
                         setDetectedCameras(data.cameras || []);
@@ -269,7 +269,7 @@
             const handleCameraSelect = (cameraInfo) => {
                 setSelectedCamera(cameraInfo.id);
                 setCameraName(cameraInfo.name);
-                setCameraUrl(cameraInfo.url);
+                setCameraUrl(String(cameraInfo.url)); // Convert to string for text field
             };
 
             const handleTest = async () => {
@@ -376,23 +376,31 @@
                                         <Select
                                             value={selectedCamera}
                                             onChange={(e) => {
-                                                const camera = detectedCameras.find(c => c.id === e.target.value);
-                                                if (camera) handleCameraSelect(camera);
+                                                const cameraId = e.target.value;
+                                                if (cameraId === '') {
+                                                    // Manual entry selected - clear fields
+                                                    setSelectedCamera('');
+                                                    setCameraName('');
+                                                    setCameraUrl('');
+                                                } else {
+                                                    // Camera selected - populate fields
+                                                    const camera = detectedCameras.find(c => c.id === cameraId);
+                                                    if (camera) handleCameraSelect(camera);
+                                                }
                                             }}
                                             label="Select Detected Camera"
                                         >
                                             <MenuItem value="">
-                                                <em>None - Manual Entry</em>
+                                                <em>Manual Entry Below</em>
                                             </MenuItem>
                                             {detectedCameras.map((camera) => (
                                                 <MenuItem key={camera.id} value={camera.id}>
                                                     <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                                                         <Typography variant="body2">
-                                                            🎥 {camera.name}
+                                                            📹 {camera.name}
                                                         </Typography>
                                                         <Typography variant="caption" color="text.secondary">
-                                                            {camera.resolution && `${camera.resolution} • `}
-                                                            {camera.platform} • {camera.backend}
+                                                            {camera.resolution} • {camera.type} • {camera.backend}
                                                         </Typography>
                                                     </Box>
                                                 </MenuItem>
@@ -401,14 +409,14 @@
                                     </FormControl>
                                 ) : !loadingCameras && (
                                     <Typography variant="body2" color="text.secondary">
-                                        No cameras detected. Use manual entry below.
+                                        No cameras detected. Please use manual entry below.
                                     </Typography>
                                 )}
                             </Box>
 
                             {/* Manual Entry Section */}
                             <Typography variant="h6" sx={{ mt: 2 }}>
-                                Manual Camera Entry
+                                📝 Manual Camera Entry
                             </Typography>
                             
                             <TextField
@@ -417,14 +425,15 @@
                                 onChange={(e) => setCameraName(e.target.value)}
                                 fullWidth
                                 placeholder="My Camera"
+                                helperText="Give your camera a descriptive name"
                             />
                             <TextField
-                                label="Camera URL (RTSP/HTTP/Index)"
+                                label="Camera URL/Index"
                                 value={cameraUrl}
                                 onChange={(e) => setCameraUrl(e.target.value)}
                                 fullWidth
-                                placeholder="rtsp://username:password@ip:port/stream or http://ip:port/video or 0 for built-in camera"
-                                helperText="Examples: 0 (built-in), rtsp://admin:pass@192.168.1.100:554/stream, http://192.168.1.100:8080/video"
+                                placeholder="0 for built-in, 1 for second camera, or rtsp://user:pass@ip:port/stream"
+                                helperText="Use: 0 (built-in camera), 1 (external camera), or full RTSP/HTTP URL"
                             />
                             <Box sx={{ display: 'flex', gap: 1 }}>
                                 <Button 
@@ -897,6 +906,158 @@
                         </Typography>
                     </CardContent>
                 </Card>
+            );
+        }
+
+        // Gallery Dialog Component
+        function GalleryDialog({ open, onClose, person }) {
+            const [galleryDates, setGalleryDates] = useState([]);
+            const [selectedImages, setSelectedImages] = useState([]);
+            const [selectedDate, setSelectedDate] = useState(null);
+            const [loading, setLoading] = useState(false);
+
+            // Load gallery dates when dialog opens
+            useEffect(() => {
+                if (open) {
+                    loadGalleryDates();
+                }
+            }, [open]);
+
+            const loadGalleryDates = async () => {
+                setLoading(true);
+                try {
+                    const response = await fetch('/api/gallery/dates');
+                    if (response.ok) {
+                        const data = await response.json();
+                        setGalleryDates(data.dates || []);
+                    }
+                } catch (error) {
+                    console.error('Failed to load gallery dates:', error);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const loadImagesForDate = async (date) => {
+                setLoading(true);
+                try {
+                    const response = await fetch(`/api/gallery/images/${date}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        // Filter images for the selected person if specified
+                        let images = data.images || [];
+                        if (person) {
+                            images = images.filter(img => 
+                                img.person_name === person.name || 
+                                img.person_name.replace(/_/g, ' ') === person.name
+                            );
+                        }
+                        setSelectedImages(images);
+                        setSelectedDate(date);
+                    }
+                } catch (error) {
+                    console.error('Failed to load images:', error);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const handleClose = () => {
+                setSelectedImages([]);
+                setSelectedDate(null);
+                onClose();
+            };
+
+            return (
+                <Dialog open={open} onClose={handleClose} maxWidth="lg" fullWidth>
+                    <DialogTitle>
+                        {person ? `Detection Gallery - ${person.name}` : 'Detection Gallery'}
+                        <IconButton onClick={handleClose} sx={{ float: 'right' }}>
+                            <span className="material-icons">close</span>
+                        </IconButton>
+                    </DialogTitle>
+                    <DialogContent>
+                        {loading && (
+                            <Box display="flex" justifyContent="center" p={3}>
+                                <CircularProgress />
+                            </Box>
+                        )}
+                        
+                        {!selectedDate ? (
+                            // Show date selection
+                            <Box>
+                                <Typography variant="h6" gutterBottom>
+                                    Select a Date
+                                </Typography>
+                                <Grid container spacing={2}>
+                                    {galleryDates.map((dateInfo) => (
+                                        <Grid item xs={12} sm={6} md={4} key={dateInfo.date}>
+                                            <Card 
+                                                sx={{ cursor: 'pointer' }}
+                                                onClick={() => loadImagesForDate(dateInfo.date)}
+                                            >
+                                                <CardContent>
+                                                    <Typography variant="h6">
+                                                        {dateInfo.formatted_date}
+                                                    </Typography>
+                                                    <Typography variant="body2" color="text.secondary">
+                                                        {dateInfo.image_count} detection{dateInfo.image_count !== 1 ? 's' : ''}
+                                                    </Typography>
+                                                </CardContent>
+                                            </Card>
+                                        </Grid>
+                                    ))}
+                                </Grid>
+                            </Box>
+                        ) : (
+                            // Show images for selected date
+                            <Box>
+                                <Box display="flex" alignItems="center" mb={2}>
+                                    <Button 
+                                        startIcon={<span className="material-icons">arrow_back</span>}
+                                        onClick={() => setSelectedDate(null)}
+                                    >
+                                        Back to Dates
+                                    </Button>
+                                    <Typography variant="h6" sx={{ ml: 2 }}>
+                                        {galleryDates.find(d => d.date === selectedDate)?.formatted_date}
+                                    </Typography>
+                                </Box>
+                                
+                                {selectedImages.length === 0 ? (
+                                    <Typography color="text.secondary" align="center">
+                                        No detections found for this date
+                                        {person ? ` for ${person.name}` : ''}
+                                    </Typography>
+                                ) : (
+                                    <Grid container spacing={2}>
+                                        {selectedImages.map((image, index) => (
+                                            <Grid item xs={12} sm={6} md={4} lg={3} key={index}>
+                                                <Card>
+                                                    <CardMedia
+                                                        component="img"
+                                                        height="200"
+                                                        image={image.path}
+                                                        alt={`Detection of ${image.person_name}`}
+                                                        sx={{ objectFit: 'cover' }}
+                                                    />
+                                                    <CardContent>
+                                                        <Typography variant="body2">
+                                                            {image.person_name.replace(/_/g, ' ')}
+                                                        </Typography>
+                                                        <Typography variant="caption" color="text.secondary">
+                                                            {image.time}
+                                                        </Typography>
+                                                    </CardContent>
+                                                </Card>
+                                            </Grid>
+                                        ))}
+                                    </Grid>
+                                )}
+                            </Box>
+                        )}
+                    </DialogContent>
+                </Dialog>
             );
         }
 
@@ -1643,6 +1804,15 @@
                             onEdit={handleEditPerson}
                             person={editingPerson}
                             loading={editPersonLoading}
+                        />
+
+                        <GalleryDialog 
+                            open={galleryDialog}
+                            onClose={() => {
+                                setGalleryDialog(false);
+                                setSelectedPerson(null);
+                            }}
+                            person={selectedPerson}
                         />
 
                         {/* Snackbar for alerts */}
