@@ -44,19 +44,12 @@ from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, HTM
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-# ─── Base directory (always webapp/ regardless of cwd) ────────────────────────
-_BASE_DIR = Path(__file__).parent.resolve()
-# Ensure sibling modules (camera_api, face_db, …) are importable when running
-# uvicorn from the repo root (e.g. `uvicorn webapp.app:app`).
-if str(_BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(_BASE_DIR))
-
 # ─── Constants ────────────────────────────────────────────────────────────────
-DB_PATH          = str(_BASE_DIR / 'simple_face_recognition.db')
-GALLERY_FOLDER   = str(_BASE_DIR / 'gallery')
-PEOPLE_FOLDER    = str(_BASE_DIR / 'people')
-EMBEDDINGS_FOLDER = str(_BASE_DIR / 'embeddings')
-FACE_DB_PATH     = str(_BASE_DIR / 'embeddings' / 'face_db.pkl')
+DB_PATH          = 'simple_face_recognition.db'
+GALLERY_FOLDER   = 'gallery'
+PEOPLE_FOLDER    = 'people'
+EMBEDDINGS_FOLDER = 'embeddings'
+FACE_DB_PATH     = os.path.join(EMBEDDINGS_FOLDER, 'face_db.pkl')
 LOCAL_TIMEZONE   = pytz.timezone('Asia/Kolkata')
 ALERT_THRESHOLD  = 0.55   # min confidence to fire alert  (SOFT tier)
 
@@ -81,8 +74,8 @@ fastapi_app = FastAPI(lifespan=lifespan)
 # ASGI entry-point (used by uvicorn): socketio wraps fastapi
 app = socketio.ASGIApp(sio, fastapi_app)
 
-fastapi_app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
-templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
+fastapi_app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
 # ─── Optional enhanced camera module ─────────────────────────────────────────
 USE_ENHANCED_FEATURES = False

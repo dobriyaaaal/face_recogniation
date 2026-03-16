@@ -98,34 +98,24 @@ class FaceRecognitionLauncher:
         """Check if Python dependencies are installed"""
         print("\n📦 Checking Python dependencies...")
         required_packages = [
-            ('flask', 'Flask web framework'),
-            ('flask_socketio', 'WebSocket support'),
-            ('opencv-python', 'Computer vision library'),
-            ('insightface', 'Face recognition AI'),
-            ('numpy', 'Numerical computing'),
-            ('pillow', 'Image processing'),
-            ('sqlite3', 'Database (built-in)')
+            ('fastapi',      'FastAPI web framework'),
+            ('uvicorn',      'ASGI server'),
+            ('socketio',     'WebSocket support (python-socketio)'),
+            ('cv2',          'Computer vision (opencv-python)'),
+            ('insightface',  'Face recognition AI'),
+            ('numpy',        'Numerical computing'),
+            ('PIL',          'Image processing (pillow)'),
+            ('sqlite3',      'Database (built-in)'),
         ]
 
-        # Map package name -> actual import name
-        import_names = {
-            'flask': 'flask',
-            'flask_socketio': 'flask_socketio',
-            'opencv-python': 'cv2',
-            'insightface': 'insightface',
-            'numpy': 'numpy',
-            'pillow': 'PIL',          # <-- key fix
-            'sqlite3': 'sqlite3',
-        }
-
         missing_packages = []
-        for package, description in required_packages:
+        for import_name, description in required_packages:
             try:
-                __import__(import_names[package])
-                print(f"  ✅ {package} - {description}")
+                __import__(import_name)
+                print(f"  ✅ {import_name} - {description}")
             except ImportError:
-                print(f"  ❌ {package} - {description} (missing)")
-                missing_packages.append(package)
+                print(f"  ❌ {import_name} - {description} (missing)")
+                missing_packages.append(import_name)
         
         return missing_packages
     
@@ -220,9 +210,6 @@ class FaceRecognitionLauncher:
         print(f"   Debug: {debug}")
         print(f"   URL: http://{host}:{port}")
         
-        # Change to webapp directory
-        os.chdir(self.webapp_dir)
-        
         # Prepare environment
         env = os.environ.copy()
         env['FLASK_HOST'] = host
@@ -250,10 +237,15 @@ class FaceRecognitionLauncher:
                 
                 threading.Thread(target=open_browser, daemon=True).start()
             
-            # Start Flask app
+            # Start uvicorn from the repo root — app.py resolves all paths via __file__
             subprocess.run([
-                self.python_executable, "app.py"
-            ], env=env, check=True)
+                self.python_executable, "-m", "uvicorn",
+                "webapp.app:app",
+                "--app-dir", str(self.root_dir),
+                "--host", host,
+                "--port", str(port),
+                "--log-level", "warning",
+            ], check=True, cwd=str(self.root_dir))
             
         except KeyboardInterrupt:
             print("\n\n🛑 Shutting down Face Recognition System...")

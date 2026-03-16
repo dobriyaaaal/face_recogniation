@@ -63,30 +63,31 @@ class OptimizedFaceDetector:
             for rec in recommendations:
                 print(f">> {rec}")
             
-            # Initialize InsightFace with optimized settings
-            model_name = 'buffalo_s'  # Lightweight model for real-time performance
+            # antelopev2: ArcFace R100 backbone — highest accuracy for crowd/surveillance
+            model_name = 'antelopev2'
             
             # Platform-specific optimizations
             if self.platform_name == 'darwin' and self.hardware_info.get('apple_neural_engine'):
-                print(">> Optimizing for Apple Silicon...")
-                # Apple Silicon specific settings
-                self.app = FaceAnalysis(name=model_name, providers=['CPUExecutionProvider'])
-                self.app.prepare(ctx_id=-1)  # CPU is often better on Apple Silicon
+                print(">> Optimizing for Apple Silicon (CoreML)...")
+                self.app = FaceAnalysis(name=model_name,
+                                        providers=['CoreMLExecutionProvider', 'CPUExecutionProvider'])
+                self.app.prepare(ctx_id=-1, det_size=(1280, 1280))
                 
             elif self.hardware_info.get('cuda'):
-                print(">> Optimizing for CUDA GPU...")
+                print(">> Optimizing for CUDA GPU (TensorRT-ready)...")
                 try:
-                    self.app = FaceAnalysis(name=model_name, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-                    self.app.prepare(ctx_id=0)  # Use GPU
+                    self.app = FaceAnalysis(name=model_name,
+                                            providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+                    self.app.prepare(ctx_id=0, det_size=(1280, 1280))
                 except Exception as e:
                     print(f">> CUDA initialization failed, falling back to CPU: {e}")
                     self.app = FaceAnalysis(name=model_name)
-                    self.app.prepare(ctx_id=-1)
+                    self.app.prepare(ctx_id=-1, det_size=(1280, 1280))
                     
             else:
                 print(">> Using CPU inference...")
                 self.app = FaceAnalysis(name=model_name)
-                self.app.prepare(ctx_id=-1)
+                self.app.prepare(ctx_id=-1, det_size=(1280, 1280))
             
             # Load face database
             self._load_face_database()
@@ -102,19 +103,41 @@ class OptimizedFaceDetector:
             return None
     
     def _load_face_database(self):
-        """Load face database from pickle file"""
+        """Load FAISS index (fast, O(log n)) with numpy list fallback."""
         face_db_path = 'embeddings/face_db.pkl'
-        self.known_faces = {}
-        
+        faiss_path   = 'embeddings/face_db.faiss'
+        names_path   = 'embeddings/face_db_names.pkl'
+
+        self.known_faces  = {}
+        self.faiss_index  = None
+        self.faiss_names  = None
+
+        # Try FAISS first
+        try:
+            import faiss as _faiss
+            if os.path.exists(faiss_path) and os.path.exists(names_path):
+                self.faiss_index = _faiss.read_index(faiss_path)
+                with open(names_path, 'rb') as f:
+                    self.faiss_names = pickle.load(f)
+                print(f">> FAISS index loaded: {self.faiss_index.ntotal} vectors")
+        except ImportError:
+            print(">> faiss not installed — numpy fallback active")
+        except Exception as e:
+            print(f">> FAISS load error: {e} — numpy fallback active")
+
+        # Always load pkl (needed for numpy fallback + person-count display)
         if os.path.exists(face_db_path):
             try:
                 with open(face_db_path, 'rb') as f:
                     face_db = pickle.load(f)
                     for name, data in face_db.items():
-                        self.known_faces[name] = data['embedding']
-                print(f">> Loaded face database: {len(self.known_faces)} people")
+                        if 'embeddings' in data:
+                            self.known_faces[name] = data['embeddings']
+                        elif 'embedding' in data:
+                            self.known_faces[name] = [data['embedding']]
+                print(f">> Loaded face DB: {len(self.known_faces)} people")
             except Exception as e:
-                print(f">> Error loading face database: {e}")
+                print(f">> Error loading face DB: {e}")
         else:
             print(">> No face database found, will detect unknown faces only")
     
@@ -138,12 +161,12 @@ class OptimizedFaceDetector:
             if not self.app:
                 return None
             
-            # Optimize frame size for faster processing
             original_frame = frame.copy()
             height, width = frame.shape[:2]
-            
-            # Resize frame if too large (maintain aspect ratio)
-            max_dimension = 640
+
+            # Pass full resolution to detector — antelopev2 with det_size=1280 handles it.
+            # Only hard-cap at 1920 to avoid OOM on embedded hardware.
+            max_dimension = 1920
             if max(width, height) > max_dimension:
                 if width > height:
                     new_width = max_dimension
@@ -151,8 +174,7 @@ class OptimizedFaceDetector:
                 else:
                     new_height = max_dimension
                     new_width = int(width * max_dimension / height)
-                
-                frame = cv2.resize(frame, (new_width, new_height))
+                frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
                 scale_x = width / new_width
                 scale_y = height / new_height
             else:
@@ -160,6 +182,16 @@ class OptimizedFaceDetector:
             
             # Detect faces using InsightFace
             faces = self.app.get(frame)
+
+            # Multi-scale fallback: if nothing found, upsample 2x to catch distant/small faces
+            if not faces:
+                upscaled = cv2.resize(frame, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+                faces_up = self.app.get(upscaled)
+                if faces_up:
+                    # Halve bbox coords to map back to original (pre-upscale) space
+                    for f in faces_up:
+                        f.bbox /= 2.0
+                    faces = faces_up
             
             if not faces:
                 return {
@@ -192,33 +224,56 @@ class OptimizedFaceDetector:
                 else:
                     face_img = None
                 
-                # Find best match among known faces
-                best_match = "Unknown"
-                best_confidence = 0.0
+                # ── Embedding matching ──────────────────────────────────────────
+                best_name    = 'Unknown'
+                best_score   = 0.0
                 similarity_scores = {}
-                
-                for name, known_embedding in self.known_faces.items():
-                    # Calculate cosine similarity
-                    similarity = float(np.dot(embedding, known_embedding))
-                    similarity_scores[name] = similarity
-                    
-                    if similarity > best_confidence:
-                        best_confidence = similarity
-                        best_match = name
-                
-                # Apply confidence threshold
-                if best_confidence < confidence_threshold:
-                    best_match = "Unknown"
-                    best_confidence = 0.0
+
+                if self.faiss_index is not None and self.faiss_names is not None:
+                    # FAISS path: O(log n) search across entire DB
+                    import faiss as _faiss
+                    q = embedding.reshape(1, -1).astype(np.float32)
+                    _faiss.normalize_L2(q)
+                    scores, indices = self.faiss_index.search(q, k=min(3, self.faiss_index.ntotal))
+                    for s, idx in zip(scores[0], indices[0]):
+                        if idx < 0:
+                            continue
+                        n = self.faiss_names[int(idx)]
+                        similarity_scores[n] = max(similarity_scores.get(n, 0.0), float(s))
+                    if similarity_scores:
+                        best_name  = max(similarity_scores, key=similarity_scores.get)
+                        best_score = similarity_scores[best_name]
+                else:
+                    # Numpy fallback: score against all stored reference embeddings
+                    for name, embeddings in self.known_faces.items():
+                        score = max(float(np.dot(embedding, e)) for e in embeddings)
+                        similarity_scores[name] = score
+                        if score > best_score:
+                            best_score = score
+                            best_name  = name
+
+                # Tiered confidence:
+                #   >= 0.75 → HIGH  (auto-alert, high-confidence hit)
+                #   >= 0.55 → SOFT  (flag for human review)
+                #   < 0.55  → Unknown
+                if best_score >= 0.75:
+                    match_tier = 'HIGH'
+                elif best_score >= 0.55:
+                    match_tier = 'SOFT'
+                else:
+                    best_name  = 'Unknown'
+                    best_score = 0.0
+                    match_tier = 'NONE'
                 
                 # Get additional face attributes if available
                 face_info = {
-                    'name': best_match,
-                    'confidence': best_confidence,
-                    'bbox': bbox.tolist(),
-                    'face_image': face_img,
+                    'name':             best_name,
+                    'confidence':       best_score,
+                    'match_tier':       match_tier,
+                    'bbox':             bbox.tolist(),
+                    'face_image':       face_img,
                     'similarity_scores': similarity_scores,
-                    'embedding': embedding.tolist() if len(self.known_faces) == 0 else None,  # Only include for debugging
+                    'embedding': embedding.tolist() if len(self.known_faces) == 0 else None,
                 }
                 
                 # Add face attributes if available from InsightFace
@@ -247,13 +302,14 @@ class OptimizedFaceDetector:
                 'original_size': f'{width}x{height}'
             }
             
-            # Maintain backward compatibility
+            # Backward compat keys (used by basic detector callers)
             if primary_face:
                 result.update({
-                    'name': primary_face['name'],
+                    'name':       primary_face['name'],
                     'confidence': primary_face['confidence'],
-                    'bbox': primary_face['bbox'],
-                    'face_image': primary_face['face_image']
+                    'bbox':       primary_face['bbox'],
+                    'face_image': primary_face['face_image'],
+                    'match_tier': primary_face.get('match_tier', 'NONE'),
                 })
             
             return result
