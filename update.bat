@@ -1,7 +1,21 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-:: ── Require admin ─────────────────────────────────────────────────────────────
+:: ════════════════════════════════════════════════════════════════
+::  CONFIGURE THIS — paste your Google Drive or OneDrive link here
+::
+::  Google Drive:
+::    1. Upload the zip → right-click → Share → "Anyone with the link"
+::    2. Copy the link  (looks like: https://drive.google.com/file/d/XXXX/view)
+::    3. Paste it below — this script converts it to a direct download automatically
+::
+::  OneDrive:
+::    1. Upload the zip → Share → "Anyone with the link" → Copy
+::    2. Paste it below as-is
+:: ════════════════════════════════════════════════════════════════
+set "SHARE_URL=PASTE_YOUR_LINK_HERE"
+
+:: ── Require admin ────────────────────────────────────────────────────────────
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     powershell -Command "Start-Process cmd -ArgumentList '/c \"\"%~f0\"\"' -Verb RunAs -Wait"
@@ -19,46 +33,124 @@ echo ============================================================
 echo.
 
 :: ════════════════════════════════════════════════════════════════
-:: Check git is available
+:: Sanity check — make sure the URL has been set
 :: ════════════════════════════════════════════════════════════════
-where git >nul 2>&1
-if !errorlevel! neq 0 (
-    echo   Git is not installed.
+if "!SHARE_URL!"=="PASTE_YOUR_LINK_HERE" (
+    echo   ERROR: No update URL configured.
+    echo   Open update.bat in Notepad and paste your Google Drive or
+    echo   OneDrive share link into the SHARE_URL variable at the top.
     echo.
-    echo   Please install Git for Windows, then re-run this script:
-    echo     https://git-scm.com/download/win
-    echo.
-    echo   Opening download page...
-    start "" "https://git-scm.com/download/win"
     pause
     exit /b 1
 )
 
 :: ════════════════════════════════════════════════════════════════
-:: Pull latest code
+:: Convert Google Drive share link → direct download URL
 :: ════════════════════════════════════════════════════════════════
-echo [1/3] Pulling latest code from GitHub...
-git pull
+set "DOWNLOAD_URL=!SHARE_URL!"
+
+echo !SHARE_URL! | findstr /i "drive.google.com/file/d/" >nul
+if !errorlevel! equ 0 (
+    :: Extract the file ID between /d/ and the next /
+    for /f "tokens=6 delims=/" %%I in ("!SHARE_URL!") do set "GDRIVE_ID=%%I"
+    :: Strip any query string from the ID
+    for /f "tokens=1 delims=?" %%I in ("!GDRIVE_ID!") do set "GDRIVE_ID=%%I"
+    set "DOWNLOAD_URL=https://drive.google.com/uc?export=download&confirm=t&id=!GDRIVE_ID!"
+    echo   Google Drive link detected. File ID: !GDRIVE_ID!
+)
+
+echo !SHARE_URL! | findstr /i "1drv.ms\|onedrive.live.com\|sharepoint.com" >nul
+if !errorlevel! equ 0 (
+    :: OneDrive: replace the last part to force direct download
+    set "DOWNLOAD_URL=!SHARE_URL!"
+    echo !SHARE_URL! | findstr /i "download=1" >nul
+    if !errorlevel! neq 0 (
+        set "DOWNLOAD_URL=!SHARE_URL!&download=1"
+    )
+    echo   OneDrive link detected.
+)
+
+:: ════════════════════════════════════════════════════════════════
+:: Step 1 — Download the update zip
+:: ════════════════════════════════════════════════════════════════
+echo.
+echo [1/3] Downloading update...
+set "ZIP_TEMP=%TEMP%\face_rec_update.zip"
+
+powershell -NoProfile -Command ^
+    "try { Invoke-WebRequest -Uri '!DOWNLOAD_URL!' -OutFile '!ZIP_TEMP!' -UseBasicParsing; exit 0 } catch { Write-Host $_.Exception.Message; exit 1 }"
+
 if !errorlevel! neq 0 (
     echo.
-    echo   ERROR: git pull failed.
-    echo   Make sure you have internet access and your GitHub credentials are set up.
-    echo   If prompted for a password, use a Personal Access Token, not your GitHub password.
-    echo     How to create one: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens
+    echo   ERROR: Download failed.
+    echo   - Check your internet connection
+    echo   - Make sure the share link is set to 'Anyone with the link can view'
+    echo   - Try opening this URL in your browser to test it:
+    echo     !DOWNLOAD_URL!
     echo.
     pause
     exit /b 1
 )
-echo   Code updated.
+
+if not exist "!ZIP_TEMP!" (
+    echo   ERROR: Downloaded file not found. The link may have expired.
+    pause
+    exit /b 1
+)
+
+echo   Download complete.
 echo.
 
 :: ════════════════════════════════════════════════════════════════
-:: Update Python packages (in case requirements changed)
+:: Step 2 — Extract (preserve user data: venv, people, embeddings, gallery)
 :: ════════════════════════════════════════════════════════════════
-echo [2/3] Checking Python packages...
+echo [2/3] Applying update...
+
+:: Extract to a temp staging folder
+set "STAGE_DIR=%TEMP%\face_rec_stage"
+if exist "!STAGE_DIR!" rmdir /s /q "!STAGE_DIR!"
+
+powershell -NoProfile -Command ^
+    "Expand-Archive -Path '!ZIP_TEMP!' -DestinationPath '!STAGE_DIR!' -Force"
+
+if !errorlevel! neq 0 (
+    echo   ERROR: Failed to extract the update zip.
+    del "!ZIP_TEMP!" >nul 2>&1
+    pause
+    exit /b 1
+)
+
+:: Find the root folder inside the zip (handles any folder name)
+set "STAGE_ROOT="
+for /d %%D in ("!STAGE_DIR!\*") do (
+    if not defined STAGE_ROOT set "STAGE_ROOT=%%D"
+)
+
+if not defined STAGE_ROOT (
+    echo   ERROR: Could not find content inside the zip.
+    pause
+    exit /b 1
+)
+
+:: Copy new code files — explicitly skip user data folders
+robocopy "!STAGE_ROOT!" "%~dp0" /E /XD venv .git ^
+    /XD "webapp\people" "webapp\embeddings" "webapp\gallery" ^
+    /XF "*.db" /NFL /NDL /NJH /NJS >nul
+
+:: Cleanup temp files
+rmdir /s /q "!STAGE_DIR!" >nul 2>&1
+del "!ZIP_TEMP!" >nul 2>&1
+
+echo   Files updated.
+echo.
+
+:: ════════════════════════════════════════════════════════════════
+:: Step 3 — Update Python packages (catches any new dependencies)
+:: ════════════════════════════════════════════════════════════════
+echo [3/3] Checking Python packages...
 
 if not exist "venv\Scripts\activate.bat" (
-    echo   Virtual environment not found. Running full setup...
+    echo   Virtual environment not found. Running full setup first...
     call setup.bat
     exit /b
 )
@@ -71,12 +163,10 @@ echo.
 :: ════════════════════════════════════════════════════════════════
 :: Done
 :: ════════════════════════════════════════════════════════════════
-echo [3/3] Done.
-echo.
 echo ============================================================
 echo   Update complete!
 echo.
-echo   Run START.BAT to launch the application.
+echo   Double-click START.BAT to launch the application.
 echo ============================================================
 echo.
 pause
