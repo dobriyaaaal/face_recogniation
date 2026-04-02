@@ -1,0 +1,76 @@
+name: Build & Publish Release
+
+# Triggers:
+#   - Push a version tag:  git tag v1.0 && git push origin v1.0
+#   - Or manually from GitHub → Actions → "Build & Publish Release" → Run workflow
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label (e.g. v1.2)'
+        required: true
+        default: 'v1.0'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to create releases
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build release zip
+        run: |
+          ZIP_NAME="FaceRecognitionSystem-${{ steps.ver.outputs.tag }}-Windows.zip"
+          zip -r "$ZIP_NAME" . \
+            --exclude ".git/*" \
+            --exclude ".gitattributes" \
+            --exclude ".github/*" \
+            --exclude "venv/*" \
+            --exclude "**/__pycache__/*" \
+            --exclude "**/*.pyc" \
+            --exclude "**/*.db" \
+            --exclude "**/*.pkl" \
+            --exclude "**/*.zip" \
+            --exclude "webapp/people/*" \
+            --exclude "webapp/gallery/*"
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+          echo "Built: $(du -sh $ZIP_NAME)"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: "Face Recognition System ${{ steps.ver.outputs.tag }}"
+          body: |
+            ## Face Recognition System ${{ steps.ver.outputs.tag }}
+
+            ### Installation (first time)
+            1. Download the zip below
+            2. Extract to any folder (e.g. `C:\FaceRecognitionSystem\`)
+            3. Double-click **SETUP.BAT** — installs Python, packages, and AI models automatically
+            4. Double-click **START.BAT** to launch — browser opens automatically
+
+            ### Update (already installed)
+            Double-click **UPDATE.BAT** — pulls latest code and syncs packages automatically.
+
+            ### Requirements
+            - Windows 10 / 11
+            - Internet connection (for setup + AI model download ~380MB)
+            - NVIDIA GPU recommended (CUDA 11.8 for GPU acceleration) — works on CPU too
+          files: ${{ env.ZIP_NAME }}
+          token: ${{ secrets.GITHUB_TOKEN }}
