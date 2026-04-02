@@ -71,23 +71,24 @@ class OptimizedFaceDetector:
                 print(">> Optimizing for Apple Silicon (CoreML)...")
                 self.app = FaceAnalysis(name=model_name,
                                         providers=['CoreMLExecutionProvider', 'CPUExecutionProvider'])
-                self.app.prepare(ctx_id=-1, det_size=(1280, 1280))
-                
+                self.app.prepare(ctx_id=-1, det_size=(640, 640))
+
             elif self.hardware_info.get('cuda'):
-                print(">> Optimizing for CUDA GPU (TensorRT-ready)...")
+                print(">> Optimizing for CUDA GPU — det_size 1280x1280...")
                 try:
                     self.app = FaceAnalysis(name=model_name,
                                             providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
                     self.app.prepare(ctx_id=0, det_size=(1280, 1280))
+                    print(">> CUDA GPU active")
                 except Exception as e:
-                    print(f">> CUDA initialization failed, falling back to CPU: {e}")
+                    print(f">> CUDA init failed ({e}), falling back to CPU 640x640")
                     self.app = FaceAnalysis(name=model_name)
-                    self.app.prepare(ctx_id=-1, det_size=(1280, 1280))
-                    
+                    self.app.prepare(ctx_id=-1, det_size=(640, 640))
+
             else:
-                print(">> Using CPU inference...")
+                print(">> Using CPU inference — det_size 640x640...")
                 self.app = FaceAnalysis(name=model_name)
-                self.app.prepare(ctx_id=-1, det_size=(1280, 1280))
+                self.app.prepare(ctx_id=-1, det_size=(640, 640))
             
             # Load face database
             self._load_face_database()

@@ -12,8 +12,9 @@ def initialize_detector():
         print(">> Initializing face detector...")
         
         # antelopev2 uses ArcFace R100 backbone — highest accuracy for surveillance
+        # 640x640 is safe on CPU; GPU can handle 1280x1280
         app = FaceAnalysis(name='antelopev2')
-        app.prepare(ctx_id=-1, det_size=(1280, 1280))
+        app.prepare(ctx_id=-1, det_size=(640, 640))
         
         # Load face database
         face_db_path = 'embeddings/face_db.pkl'

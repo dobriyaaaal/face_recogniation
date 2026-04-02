@@ -36,10 +36,6 @@ def build_face_embeddings():
     can pick the best score across all reference poses/conditions.
     """
     print("[INFO] Building face embeddings...")
-    # antelopev2 uses ArcFace R100 — best accuracy for low-quality / crowd photos
-    app = FaceAnalysis(name='antelopev2')
-    app.prepare(ctx_id=-1, det_size=(1280, 1280))
-    
     base_dir = str(_BASE_DIR / 'people')
     output_path = str(_BASE_DIR / 'embeddings' / 'face_db.pkl')
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -51,6 +47,21 @@ def build_face_embeddings():
         with open(output_path, 'wb') as f:
             pickle.dump(face_db, f)
         return
+
+    # Check for any actual person folders before loading the heavy model
+    person_dirs = [d for d in os.listdir(base_dir)
+                   if os.path.isdir(os.path.join(base_dir, d))]
+    if not person_dirs:
+        print("[INFO] No people enrolled yet — skipping embedding build")
+        with open(output_path, 'wb') as f:
+            pickle.dump(face_db, f)
+        return
+
+    # antelopev2 uses ArcFace R100 — best accuracy for low-quality / crowd photos
+    # Use 640x640 for enrollment (CPU-safe); GPU users can increase this via env var
+    det_size_px = int(os.environ.get('FACE_DET_SIZE', '640'))
+    app = FaceAnalysis(name='antelopev2')
+    app.prepare(ctx_id=-1, det_size=(det_size_px, det_size_px))
 
     for person_name in os.listdir(base_dir):
         person_dir = os.path.join(base_dir, person_name)

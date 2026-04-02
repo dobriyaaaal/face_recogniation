@@ -1,20 +1,23 @@
 # Face Recognition System Requirements
-# Web framework (replaces flask + flask-socketio)
+# Web framework
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
 python-socketio==5.11.3
 python-multipart==0.0.9
 
-# Computer vision + face recognition (unchanged)
+# Computer vision + face recognition
 opencv-python==4.8.1.78
 numpy>=1.24.3,<2.0.0
 insightface==0.7.3
-onnxruntime==1.15.1
+# onnxruntime-gpu gives CUDA support on NVIDIA GPUs AND still works on CPU-only machines
+# setup.bat handles the install; do not add plain onnxruntime here
+onnxruntime-gpu==1.15.1
 pillow==10.0.0
 
-# Fast embedding search (replaces linear numpy scan)
+# Fast embedding search
 faiss-cpu==1.8.0
 
 # Utilities
 pytz==2023.3
+psutil>=5.9.0
 onvif-zeep
