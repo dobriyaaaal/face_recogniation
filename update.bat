@@ -2,7 +2,115 @@
 setlocal EnableDelayedExpansion
 
 :: ════════════════════════════════════════════════════════════════
-::  CONFIGURE THIS — paste your Google Drive or OneDrive link here
+::  SET THIS — your public GitHub repo URL
+:: ════════════════════════════════════════════════════════════════
+set "REPO_URL=https://github.com/dobriyaaaal/face_recogniation.git"
+
+:: ── Require admin ────────────────────────────────────────────────────────────
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    powershell -Command "Start-Process cmd -ArgumentList '/c \"\"%~f0\"\"' -Verb RunAs -Wait"
+    exit /b
+)
+
+title Face Recognition System - Update
+color 0A
+cd /d "%~dp0"
+
+echo.
+echo ============================================================
+echo   Face Recognition System - Updater
+echo ============================================================
+echo.
+
+:: ════════════════════════════════════════════════════════════════
+:: Check / install Git
+:: ════════════════════════════════════════════════════════════════
+echo [1/3] Checking for Git...
+where git >nul 2>&1
+if !errorlevel! neq 0 (
+    echo   Git not found. Downloading Git for Windows...
+    set "GIT_INSTALLER=%TEMP%\git-installer.exe"
+    powershell -NoProfile -Command ^
+        "Invoke-WebRequest -Uri 'https://github.com/git-for-windows/git/releases/download/v2.44.0.windows.1/Git-2.44.0-64-bit.exe' -OutFile '!GIT_INSTALLER!' -UseBasicParsing"
+    if exist "!GIT_INSTALLER!" (
+        echo   Installing Git silently...
+        "!GIT_INSTALLER!" /VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS
+        del "!GIT_INSTALLER!" >nul 2>&1
+        set "PATH=%PROGRAMFILES%\Git\cmd;%PATH%"
+        echo   Git installed.
+    ) else (
+        echo.
+        echo   ERROR: Could not download Git.
+        echo   Please install manually: https://git-scm.com/download/win
+        start "" "https://git-scm.com/download/win"
+        pause
+        exit /b 1
+    )
+) else (
+    echo   Git found.
+)
+echo.
+
+:: ════════════════════════════════════════════════════════════════
+:: Pull latest code (or clone if first time)
+:: ════════════════════════════════════════════════════════════════
+echo [2/3] Pulling latest code from GitHub...
+
+if exist ".git" (
+    git pull
+) else (
+    :: Not a git repo yet — this must be the unzipped version
+    :: Clone fresh next to this folder, then move files over
+    set "CLONE_DIR=%TEMP%\face_rec_update_clone"
+    if exist "!CLONE_DIR!" rmdir /s /q "!CLONE_DIR!"
+    git clone "%REPO_URL%" "!CLONE_DIR!"
+    if !errorlevel! neq 0 (
+        echo.
+        echo   ERROR: Could not clone from GitHub. Check your internet connection.
+        pause
+        exit /b 1
+    )
+    robocopy "!CLONE_DIR!" "%~dp0" /E /XD venv .git ^
+        /XD "webapp\people" "webapp\embeddings" "webapp\gallery" ^
+        /XF "*.db" /NFL /NDL /NJH /NJS >nul
+    robocopy "!CLONE_DIR!\.git" "%~dp0\.git" /E /NFL /NDL /NJH /NJS >nul
+    rmdir /s /q "!CLONE_DIR!" >nul 2>&1
+    echo   Repository initialized.
+)
+
+if !errorlevel! neq 0 (
+    echo.
+    echo   ERROR: git pull failed. Check your internet connection.
+    pause
+    exit /b 1
+)
+echo   Code updated.
+echo.
+
+:: ════════════════════════════════════════════════════════════════
+:: Update Python packages
+:: ════════════════════════════════════════════════════════════════
+echo [3/3] Checking Python packages...
+
+if not exist "venv\Scripts\activate.bat" (
+    echo   Virtual environment not found. Running full setup...
+    call setup.bat
+    exit /b
+)
+
+call venv\Scripts\activate.bat
+python -m pip install -r requirements.txt --quiet --no-warn-script-location 2>nul
+echo   Packages up to date.
+echo.
+
+echo ============================================================
+echo   Update complete!
+echo.
+echo   Double-click START.BAT to launch the application.
+echo ============================================================
+echo.
+pause
 ::
 ::  Google Drive:
 ::    1. Upload the zip → right-click → Share → "Anyone with the link"
